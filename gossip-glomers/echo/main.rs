@@ -3,29 +3,29 @@ use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 
 #[derive(Deserialize, Debug)]
-struct InitBody {
+struct InitBody<'a> {
     msg_id: usize,
-    node_id: String,
+    node_id: &'a str,
     node_ids: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
-struct InitOKBody {
+struct InitOKBody<'a> {
     #[serde(rename = "type")]
-    typ: &'static str,
+    typ: &'a str,
     in_reply_to: usize,
 }
 
 #[derive(Deserialize, Debug)]
-struct EchoBody {
+struct EchoBody<'a> {
     msg_id: usize,
-    echo: String,
+    echo: &'a str,
 }
 
 #[derive(Serialize, Debug)]
 struct EchoOKBody<'a> {
     #[serde(rename = "type")]
-    typ: &'static str,
+    typ: &'a str,
     msg_id: usize,
     in_reply_to: usize,
     echo: &'a str,
@@ -33,29 +33,31 @@ struct EchoOKBody<'a> {
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type")]
-enum IncomingBody {
-    init(InitBody),
-    echo(EchoBody),
+enum IncomingBody<'a> {
+    #[serde(borrow)]
+    init(InitBody<'a>),
+    #[serde(borrow)]
+    echo(EchoBody<'a>),
 }
 
 #[derive(Serialize, Debug)]
 #[serde(tag = "type")]
 enum OutgingBody<'a> {
-    init_ok(InitOKBody),
+    init_ok(InitOKBody<'a>),
     echo_ok(EchoOKBody<'a>),
 }
 
 #[derive(Deserialize, Debug)]
-struct IncomingMessage<T> {
-    src: String,
-    dest: String,
+struct IncomingMessage<'a, T> {
+    src: &'a str,
+    dest: &'a str,
     body: T,
 }
 
 #[derive(Serialize, Debug)]
-struct OutgoingMessage<T> {
-    src: String,
-    dest: String,
+struct OutgoingMessage<'a, T> {
+    src: &'a str,
+    dest: &'a str,
     body: T,
 }
 
@@ -72,11 +74,11 @@ fn main() -> Result<()> {
 
         match message.body {
             IncomingBody::init(body) => {
-                node_id = body.node_id;
+                node_id = String::from(body.node_id);
                 message_id += 1;
 
                 let outgoing = OutgoingMessage::<InitOKBody> {
-                    src: node_id.clone(),
+                    src: &node_id,
                     dest: message.src,
                     body: InitOKBody {
                         typ: "init_ok",
@@ -90,7 +92,7 @@ fn main() -> Result<()> {
             IncomingBody::echo(body) => {
                 message_id += 1;
                 let outgoing = OutgoingMessage::<EchoOKBody> {
-                    src: node_id.clone(),
+                    src: &node_id,
                     dest: message.src,
                     body: EchoOKBody {
                         typ: "echo_ok".into(),
