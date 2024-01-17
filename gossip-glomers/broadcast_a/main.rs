@@ -2,27 +2,27 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 struct InitBody<'a> {
     msg_id: usize,
     node_id: &'a str,
     node_ids: Vec<String>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 struct InitOKBody<'a> {
     #[serde(rename = "type")]
     typ: &'a str,
     in_reply_to: usize,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 struct EchoBody<'a> {
     msg_id: usize,
     echo: &'a str,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 struct EchoOKBody<'a> {
     #[serde(rename = "type")]
     typ: &'a str,
@@ -31,31 +31,21 @@ struct EchoOKBody<'a> {
     echo: &'a str,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(tag = "type")]
-enum IncomingBody<'a> {
+enum Body<'a> {
     #[serde(borrow)]
     init(InitBody<'a>),
     #[serde(borrow)]
-    echo(EchoBody<'a>),
-}
-
-#[derive(Serialize, Debug)]
-#[serde(tag = "type")]
-enum OutgingBody<'a> {
     init_ok(InitOKBody<'a>),
+    #[serde(borrow)]
+    echo(EchoBody<'a>),
+    #[serde(borrow)]
     echo_ok(EchoOKBody<'a>),
 }
 
-#[derive(Deserialize, Debug)]
-struct IncomingMessage<'a, T> {
-    src: &'a str,
-    dest: &'a str,
-    body: T,
-}
-
-#[derive(Serialize, Debug)]
-struct OutgoingMessage<'a, T> {
+#[derive(Deserialize, Serialize, Debug)]
+struct Message<'a, T> {
     src: &'a str,
     dest: &'a str,
     body: T,
@@ -69,15 +59,15 @@ fn main() -> Result<()> {
 
     for line in io::stdin().lines() {
         let line = line?;
-        let message = serde_json::from_str::<IncomingMessage<IncomingBody>>(&line)
+        let message = serde_json::from_str::<Message<Body>>(&line)
             .context("parsing incoming message JSON")?;
 
         match message.body {
-            IncomingBody::init(body) => {
+            Body::init(body) => {
                 node_id = String::from(body.node_id);
                 message_id += 1;
 
-                let outgoing = OutgoingMessage::<InitOKBody> {
+                let outgoing = Message::<InitOKBody> {
                     src: &node_id,
                     dest: message.src,
                     body: InitOKBody {
@@ -89,9 +79,10 @@ fn main() -> Result<()> {
                 writeln!(stdout, "{}", serde_json::to_string(&outgoing)?)?;
                 stdout.flush()?
             }
-            IncomingBody::echo(body) => {
+            Body::init_ok(body) => {}
+            Body::echo(body) => {
                 message_id += 1;
-                let outgoing = OutgoingMessage::<EchoOKBody> {
+                let outgoing = Message::<EchoOKBody> {
                     src: &node_id,
                     dest: message.src,
                     body: EchoOKBody {
@@ -105,6 +96,7 @@ fn main() -> Result<()> {
                 writeln!(stdout, "{}", serde_json::to_string(&outgoing)?)?;
                 stdout.flush()?
             }
+            Body::echo_ok(body) => {}
         }
     }
 
