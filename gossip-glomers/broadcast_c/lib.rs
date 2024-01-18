@@ -32,11 +32,26 @@ pub struct Message<'a, T> {
     pub body: T,
 }
 
-pub fn parse_message<'a, T>(line: &'a str) -> Result<T>
+pub fn parse_message<'a, T>(line: &'a str) -> Result<Message<T>>
 where
     T: Deserialize<'a>,
 {
-    serde_json::from_str::<T>(&line).context("parsing message JSON")
+    serde_json::from_str::<Message<T>>(&line).context("parsing message JSON")
+}
+
+pub fn send_message<'a, T>(
+    stdout: &mut StdoutLock,
+    src: &'a str,
+    dest: &'a str,
+    body: T,
+) -> Result<()>
+where
+    T: Serialize,
+{
+    let message = Message::<T> { src, dest, body };
+
+    writeln!(stdout, "{}", serde_json::to_string(&message)?)?;
+    Ok(stdout.flush()?)
 }
 
 pub struct InitData {
@@ -50,30 +65,21 @@ pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Resul
         .context("expected a message")?
         .context("reading message")?;
 
-    let message = parse_message::<Message<Body>>(&init_line)?;
+    let message = parse_message::<Body>(&init_line)?;
 
     let Body::init(body) = message.body else {
         bail!("expected the first message to be `init`")
     };
 
-    let outgoing = Message::<Body> {
-        src: body.node_id,
-        dest: message.src,
-        body: Body::init_ok(InitOKBody {
-            typ: "init_ok",
-            in_reply_to: body.msg_id,
-        }),
-    };
+    let outgoing = Body::init_ok(InitOKBody {
+        typ: "init_ok",
+        in_reply_to: body.msg_id,
+    });
 
-    writeln!(stdout, "{}", serde_json::to_string(&outgoing)?)?;
-    stdout.flush()?;
+    send_message(stdout, &body.node_id, message.src, outgoing)?;
 
     Ok(InitData {
         node_id: String::from(body.node_id),
         node_ids: body.node_ids,
     })
 }
-
-// {"src":"p1", "dest": "n1", "body":{"type":"init", "msg_id": 1, "node_id": "n1", "node_ids": []}}
-// {"src":"n1", "dest": "n2", "body":{"type":"echo", "msg_id": 1, "echo": "foobar"}}
-// {"src":"n1", "dest": "n2", "body":{"type":"echo_ok", "msg_id": 2, "in_reply_to": 1, "echo": "foobar2"}}
