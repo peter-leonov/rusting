@@ -10,9 +10,7 @@ struct InitBody<'a> {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-struct InitOKBody<'a> {
-    #[serde(rename = "type")]
-    typ: &'a str,
+struct InitOKBody {
     in_reply_to: usize,
 }
 
@@ -21,8 +19,8 @@ struct InitOKBody<'a> {
 enum Body<'a> {
     #[serde(borrow, rename = "init")]
     Init(InitBody<'a>),
-    #[serde(borrow, rename = "init_ok")]
-    InitOK(InitOKBody<'a>),
+    #[serde(rename = "init_ok")]
+    InitOK(InitOKBody),
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -54,12 +52,12 @@ where
     Ok(stdout.flush()?)
 }
 
-pub struct InitData {
-    pub node_id: String,
+pub struct Node {
+    pub id: String,
     pub node_ids: Vec<String>,
 }
 
-pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Result<InitData> {
+pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Result<Node> {
     let init_line = lines
         .next()
         .context("expected a message")?
@@ -72,14 +70,13 @@ pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Resul
     };
 
     let outgoing = Body::InitOK(InitOKBody {
-        typ: "init_ok",
         in_reply_to: body.msg_id,
     });
 
     send_message(stdout, &body.node_id, message.src, outgoing)?;
 
-    Ok(InitData {
-        node_id: String::from(body.node_id),
+    Ok(Node {
+        id: String::from(body.node_id),
         node_ids: body.node_ids,
     })
 }
