@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::io::{self, Write};
+use std::io::{Lines, StdinLock, StdoutLock, Write};
 
 #[derive(Deserialize, Serialize, Debug)]
 struct InitBody<'a> {
@@ -17,114 +17,61 @@ struct InitOKBody<'a> {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-struct EchoBody<'a> {
-    msg_id: usize,
-    echo: &'a str,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-struct EchoOKBody<'a> {
-    #[serde(rename = "type")]
-    typ: &'a str,
-    msg_id: usize,
-    in_reply_to: usize,
-    echo: &'a str,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
 #[serde(tag = "type")]
 enum Body<'a> {
     #[serde(borrow)]
     init(InitBody<'a>),
     #[serde(borrow)]
     init_ok(InitOKBody<'a>),
-    #[serde(borrow)]
-    echo(EchoBody<'a>),
-    #[serde(borrow)]
-    echo_ok(EchoOKBody<'a>),
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-struct Message<'a> {
-    src: &'a str,
-    dest: &'a str,
-    body: Body<'a>,
+pub struct Message<'a, T> {
+    pub src: &'a str,
+    pub dest: &'a str,
+    pub body: T,
 }
 
-fn parse_message<'a, T>(line: &'a str) -> Result<T>
+pub fn parse_message<'a, T>(line: &'a str) -> Result<T>
 where
     T: Deserialize<'a>,
 {
     serde_json::from_str::<T>(&line).context("parsing message JSON")
 }
 
-pub fn run() -> Result<()> {
-    let mut lines = io::stdin().lines();
-    let mut stdout = io::stdout().lock();
+pub struct InitData {
+    pub node_id: String,
+    pub node_ids: Vec<String>,
+}
 
-    let node_id = {
-        let init_line = lines
-            .next()
-            .context("expected a message")?
-            .context("reading message")?;
+pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Result<InitData> {
+    let init_line = lines
+        .next()
+        .context("expected a message")?
+        .context("reading message")?;
 
-        let message = parse_message::<Message>(&init_line)?;
+    let message = parse_message::<Message<Body>>(&init_line)?;
 
-        let Body::init(body) = message.body else {
-            bail!("expected the first message to me `init`")
-        };
-
-        let outgoing = Message {
-            src: body.node_id,
-            dest: message.src,
-            body: Body::init_ok(InitOKBody {
-                typ: "init_ok",
-                in_reply_to: body.msg_id,
-            }),
-        };
-
-        writeln!(stdout, "{}", serde_json::to_string(&outgoing)?)?;
-        stdout.flush()?;
-
-        String::from(body.node_id)
+    let Body::init(body) = message.body else {
+        bail!("expected the first message to be `init`")
     };
 
-    let mut message_id = 0;
+    let outgoing = Message::<Body> {
+        src: body.node_id,
+        dest: message.src,
+        body: Body::init_ok(InitOKBody {
+            typ: "init_ok",
+            in_reply_to: body.msg_id,
+        }),
+    };
 
-    for line in lines {
-        let line = line.context("reading message")?;
-        let message = parse_message::<Message>(&line)?;
+    writeln!(stdout, "{}", serde_json::to_string(&outgoing)?)?;
+    stdout.flush()?;
 
-        match message.body {
-            Body::init(_) => {
-                bail!("duplicate init message")
-            }
-            Body::init_ok(_) => {
-                bail!("unexpected init_ok message")
-            }
-            Body::echo(body) => {
-                message_id += 1;
-                let outgoing = Message {
-                    src: &node_id,
-                    dest: message.src,
-                    body: Body::echo_ok(EchoOKBody {
-                        typ: "echo_ok".into(),
-                        msg_id: message_id,
-                        in_reply_to: body.msg_id,
-                        echo: &body.echo,
-                    }),
-                };
-
-                writeln!(stdout, "{}", serde_json::to_string(&outgoing)?)?;
-                stdout.flush()?
-            }
-            Body::echo_ok(_) => {
-                bail!("unexpected echo_ok message")
-            }
-        }
-    }
-
-    Ok(())
+    Ok(InitData {
+        node_id: String::from(body.node_id),
+        node_ids: body.node_ids,
+    })
 }
 
 // {"src":"p1", "dest": "n1", "body":{"type":"init", "msg_id": 1, "node_id": "n1", "node_ids": []}}
