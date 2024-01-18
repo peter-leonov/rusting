@@ -1,16 +1,16 @@
 use anyhow::{bail, Context, Result};
-use flyio::{parse_message, take_init, Message};
+use flyio::{parse_message, send_message, take_init};
 use serde::{Deserialize, Serialize};
-use std::io::{self, Write};
+use std::io::{self};
 
 #[derive(Deserialize, Serialize, Debug)]
-struct EchoBody<'a> {
+struct Echo<'a> {
     msg_id: usize,
     echo: &'a str,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-struct EchoOKBody<'a> {
+struct EchoOK<'a> {
     #[serde(rename = "type")]
     typ: &'a str,
     msg_id: usize,
@@ -22,9 +22,9 @@ struct EchoOKBody<'a> {
 #[serde(tag = "type")]
 enum Body<'a> {
     #[serde(borrow)]
-    echo(EchoBody<'a>),
+    echo(Echo<'a>),
     #[serde(borrow)]
-    echo_ok(EchoOKBody<'a>),
+    echo_ok(EchoOK<'a>),
 }
 
 pub fn main() -> Result<()> {
@@ -38,24 +38,19 @@ pub fn main() -> Result<()> {
 
     for line in lines {
         let line = line.context("reading message")?;
-        let message = parse_message::<Message<Body>>(&line)?;
+        let message = parse_message::<Body>(&line)?;
 
         match message.body {
             Body::echo(body) => {
                 message_id += 1;
-                let outgoing = Message {
-                    src: &node_id,
-                    dest: message.src,
-                    body: Body::echo_ok(EchoOKBody {
-                        typ: "echo_ok".into(),
-                        msg_id: message_id,
-                        in_reply_to: body.msg_id,
-                        echo: &body.echo,
-                    }),
-                };
+                let outgoing = Body::echo_ok(EchoOK {
+                    typ: "echo_ok".into(),
+                    msg_id: message_id,
+                    in_reply_to: body.msg_id,
+                    echo: &body.echo,
+                });
 
-                writeln!(stdout, "{}", serde_json::to_string(&outgoing)?)?;
-                stdout.flush()?
+                send_message(&mut stdout, &node_id, message.src, outgoing)?;
             }
             Body::echo_ok(_) => {
                 bail!("unexpected echo_ok message")
