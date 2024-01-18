@@ -21,10 +21,10 @@ struct EchoOK<'a> {
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(tag = "type")]
 enum Body<'a> {
-    #[serde(borrow)]
-    echo(Echo<'a>),
-    #[serde(borrow)]
-    echo_ok(EchoOK<'a>),
+    #[serde(borrow, rename = "echo")]
+    Echo(Echo<'a>),
+    #[serde(borrow, rename = "echo_ok")]
+    EchoOK(EchoOK<'a>),
 }
 
 pub fn main() -> Result<()> {
@@ -41,9 +41,9 @@ pub fn main() -> Result<()> {
         let message = parse_message::<Body>(&line)?;
 
         match message.body {
-            Body::echo(body) => {
+            Body::Echo(body) => {
                 message_id += 1;
-                let outgoing = Body::echo_ok(EchoOK {
+                let outgoing = Body::EchoOK(EchoOK {
                     typ: "echo_ok".into(),
                     msg_id: message_id,
                     in_reply_to: body.msg_id,
@@ -52,7 +52,7 @@ pub fn main() -> Result<()> {
 
                 send_message(&mut stdout, &node_id, message.src, outgoing)?;
             }
-            Body::echo_ok(_) => {
+            Body::EchoOK(_) => {
                 bail!("unexpected echo_ok message")
             }
         }
