@@ -69,14 +69,16 @@ pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Resul
         bail!("expected the first message to be `init`")
     };
 
+    let node = Node {
+        id: String::from(body.node_id),
+        node_ids: body.node_ids,
+    };
+
     let outgoing = Body::InitOK(InitOKBody {
         in_reply_to: body.msg_id,
     });
 
-    send_message(stdout, &body.node_id, message.src, outgoing)?;
+    send_message(stdout, &node.id, message.src, outgoing)?;
 
-    Ok(Node {
-        id: String::from(body.node_id),
-        node_ids: body.node_ids,
-    })
+    Ok(node)
 }
