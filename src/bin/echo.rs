@@ -29,10 +29,13 @@ pub fn main() -> Result<()> {
     let mut lines = io::stdin().lines();
     let mut stdout = io::stdout().lock();
 
-    let init = take_init(&mut lines, &mut stdout)?;
-    let node_id = init.node_id;
+    let node = take_init(&mut lines, &mut stdout)?;
 
-    let mut message_id = 0;
+    let mut message_id: usize = 0;
+    let mut next_message_id = move || {
+        message_id += 1;
+        message_id
+    };
 
     for line in lines {
         let line = line.context("reading message")?;
@@ -40,14 +43,13 @@ pub fn main() -> Result<()> {
 
         match message.body {
             Body::Echo(body) => {
-                message_id += 1;
                 let outgoing = Body::EchoOK(EchoOK {
-                    msg_id: message_id,
+                    msg_id: next_message_id(),
                     in_reply_to: body.msg_id,
                     echo: &body.echo,
                 });
 
-                send_message(&mut stdout, &node_id, message.src, outgoing)?;
+                send_message(&mut stdout, &node.id, message.src, outgoing)?;
             }
             Body::EchoOK(_) => {
                 bail!("unexpected echo_ok message")
