@@ -11,8 +11,6 @@ struct Echo<'a> {
 
 #[derive(Deserialize, Serialize, Debug)]
 struct EchoOK<'a> {
-    #[serde(rename = "type")]
-    typ: &'a str,
     msg_id: usize,
     in_reply_to: usize,
     echo: &'a str,
@@ -44,7 +42,6 @@ pub fn main() -> Result<()> {
             Body::Echo(body) => {
                 message_id += 1;
                 let outgoing = Body::EchoOK(EchoOK {
-                    typ: "echo_ok".into(),
                     msg_id: message_id,
                     in_reply_to: body.msg_id,
                     echo: &body.echo,
