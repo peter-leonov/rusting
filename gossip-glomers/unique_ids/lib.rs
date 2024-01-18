@@ -19,10 +19,10 @@ struct InitOKBody<'a> {
 #[derive(Deserialize, Serialize, Debug)]
 #[serde(tag = "type")]
 enum Body<'a> {
-    #[serde(borrow)]
-    init(InitBody<'a>),
-    #[serde(borrow)]
-    init_ok(InitOKBody<'a>),
+    #[serde(borrow, rename = "init")]
+    Init(InitBody<'a>),
+    #[serde(borrow, rename = "init_ok")]
+    InitOK(InitOKBody<'a>),
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -67,11 +67,11 @@ pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Resul
 
     let message = parse_message::<Body>(&init_line)?;
 
-    let Body::init(body) = message.body else {
+    let Body::Init(body) = message.body else {
         bail!("expected the first message to be `init`")
     };
 
-    let outgoing = Body::init_ok(InitOKBody {
+    let outgoing = Body::InitOK(InitOKBody {
         typ: "init_ok",
         in_reply_to: body.msg_id,
     });
