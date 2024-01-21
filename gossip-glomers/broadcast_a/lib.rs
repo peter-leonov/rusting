@@ -48,7 +48,8 @@ where
 {
     let message = Message::<T> { src, dest, body };
 
-    writeln!(stdout, "{}", serde_json::to_string(&message)?)?;
+    serde_json::to_writer(&mut *stdout, &message)?;
+    writeln!(stdout, "")?;
     Ok(stdout.flush()?)
 }
 
