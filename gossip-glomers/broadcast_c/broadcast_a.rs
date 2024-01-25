@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use flyio::{parse_message, send_message, take_init};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
