@@ -3,6 +3,7 @@ use flyio::{parse_message, send_message, take_init, NodeInit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self};
+use std::io::{Lines, StdinLock, StdoutLock, Write};
 
 #[derive(Deserialize, Serialize, Debug)]
 struct Broadcast {
@@ -104,6 +105,115 @@ impl Node {
         self.message_id += 1;
         self.message_id
     }
+
+    fn main(&mut self, lines: &mut Lines<StdinLock>, mut stdout: &mut StdoutLock) -> Result<()> {
+        let mut seen = Vec::<i32>::with_capacity(100);
+
+        for line in lines {
+            let line = line.context("reading message")?;
+            // dbg!(&line);
+            let message = parse_message::<BodyIn>(&line)?;
+
+            match message.body {
+                BodyIn::Broadcast(body) => {
+                    seen.push(body.message);
+
+                    let message_id = self.next_message_id();
+                    send_message(
+                        stdout,
+                        &self.init.id,
+                        message.src,
+                        BodyOut::BroadcastOK(BroadcastOK {
+                            msg_id: message_id,
+                            in_reply_to: body.msg_id,
+                        }),
+                    )?;
+
+                    let message_id = self.next_message_id();
+                    let mut gossip_to = |group: &[String]| -> Result<()> {
+                        if let Some((head, tail)) = group.split_first() {
+                            send_message(
+                                stdout,
+                                &self.init.id,
+                                head,
+                                BodyOut::Gossip(GossipOut {
+                                    msg_id: message_id,
+                                    messages: &[body.message],
+                                    nodes: tail,
+                                }),
+                            )?;
+                        }
+
+                        Ok(())
+                    };
+
+                    let nodes = self.init.node_ids.as_slice();
+                    if nodes.len() >= 1 {
+                        let (a, b) = nodes.split_at(nodes.len() / 2);
+                        gossip_to(a)?;
+                        gossip_to(b)?;
+                    }
+                }
+                BodyIn::Read(body) => {
+                    let outgoing = BodyOut::ReadOK(ReadOK {
+                        msg_id: self.next_message_id(),
+                        in_reply_to: body.msg_id,
+                        messages: &seen,
+                    });
+
+                    send_message(&mut stdout, &self.init.id, message.src, outgoing)?;
+                }
+                BodyIn::Topology(body) => {
+                    let outgoing = BodyOut::TopologyOK(TopologyOK {
+                        msg_id: self.next_message_id(),
+                        in_reply_to: body.msg_id,
+                    });
+
+                    send_message(&mut stdout, &self.init.id, message.src, outgoing)?;
+                }
+                BodyIn::Gossip(body) => {
+                    seen.extend_from_slice(body.messages.as_slice());
+
+                    let message_id = self.next_message_id();
+                    send_message(
+                        stdout,
+                        &self.init.id,
+                        message.src,
+                        BodyOut::GossipOK(GossipOK {
+                            msg_id: message_id,
+                            in_reply_to: body.msg_id,
+                        }),
+                    )?;
+
+                    let mut gossip_to = |group: &[&str]| -> Result<()> {
+                        if let Some((head, tail)) = group.split_first() {
+                            let message_id = self.next_message_id();
+                            send_message(
+                                stdout,
+                                &self.init.id,
+                                head,
+                                BodyOut::GossipRef(GossipOut {
+                                    msg_id: message_id,
+                                    messages: body.messages.as_slice(),
+                                    nodes: tail,
+                                }),
+                            )?;
+                        }
+
+                        Ok(())
+                    };
+
+                    let nodes = body.nodes.as_slice();
+                    let (a, b) = nodes.split_at(nodes.len() / 2);
+                    gossip_to(a)?;
+                    gossip_to(b)?;
+                }
+                BodyIn::GossipOK(_) => {}
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub fn main() -> Result<()> {
@@ -117,110 +227,5 @@ pub fn main() -> Result<()> {
         init: node_init,
     };
 
-    let mut seen = Vec::<i32>::with_capacity(100);
-
-    for line in lines {
-        let line = line.context("reading message")?;
-        // dbg!(&line);
-        let message = parse_message::<BodyIn>(&line)?;
-
-        match message.body {
-            BodyIn::Broadcast(body) => {
-                seen.push(body.message);
-
-                let message_id = node.next_message_id();
-                send_message(
-                    &mut stdout,
-                    &node.init.id,
-                    message.src,
-                    BodyOut::BroadcastOK(BroadcastOK {
-                        msg_id: message_id,
-                        in_reply_to: body.msg_id,
-                    }),
-                )?;
-
-                let message_id = node.next_message_id();
-                let mut gossip_to = |group: &[String]| -> Result<()> {
-                    if let Some((head, tail)) = group.split_first() {
-                        send_message(
-                            &mut stdout,
-                            &node.init.id,
-                            head,
-                            BodyOut::Gossip(GossipOut {
-                                msg_id: message_id,
-                                messages: &[body.message],
-                                nodes: tail,
-                            }),
-                        )?;
-                    }
-
-                    Ok(())
-                };
-
-                let nodes = node.init.node_ids.as_slice();
-                if nodes.len() >= 1 {
-                    let (a, b) = nodes.split_at(nodes.len() / 2);
-                    gossip_to(a)?;
-                    gossip_to(b)?;
-                }
-            }
-            BodyIn::Read(body) => {
-                let outgoing = BodyOut::ReadOK(ReadOK {
-                    msg_id: node.next_message_id(),
-                    in_reply_to: body.msg_id,
-                    messages: &seen,
-                });
-
-                send_message(&mut stdout, &node.init.id, message.src, outgoing)?;
-            }
-            BodyIn::Topology(body) => {
-                let outgoing = BodyOut::TopologyOK(TopologyOK {
-                    msg_id: node.next_message_id(),
-                    in_reply_to: body.msg_id,
-                });
-
-                send_message(&mut stdout, &node.init.id, message.src, outgoing)?;
-            }
-            BodyIn::Gossip(body) => {
-                seen.extend_from_slice(body.messages.as_slice());
-
-                let message_id = node.next_message_id();
-                send_message(
-                    &mut stdout,
-                    &node.init.id,
-                    message.src,
-                    BodyOut::GossipOK(GossipOK {
-                        msg_id: message_id,
-                        in_reply_to: body.msg_id,
-                    }),
-                )?;
-
-                let mut gossip_to = |group: &[&str]| -> Result<()> {
-                    if let Some((head, tail)) = group.split_first() {
-                        let message_id = node.next_message_id();
-                        send_message(
-                            &mut stdout,
-                            &node.init.id,
-                            head,
-                            BodyOut::GossipRef(GossipOut {
-                                msg_id: message_id,
-                                messages: body.messages.as_slice(),
-                                nodes: tail,
-                            }),
-                        )?;
-                    }
-
-                    Ok(())
-                };
-
-                let nodes = body.nodes.as_slice();
-                let (a, b) = nodes.split_at(nodes.len() / 2);
-                gossip_to(a)?;
-                gossip_to(b)?;
-            }
-            BodyIn::GossipOK(_) => {}
-        }
-    }
-
-    Ok(())
+    node.main(&mut lines, &mut stdout)
 }
