@@ -53,12 +53,12 @@ where
     Ok(stdout.flush()?)
 }
 
-pub struct Node {
+pub struct NodeInit {
     pub id: String,
     pub node_ids: Vec<String>,
 }
 
-pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Result<Node> {
+pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Result<NodeInit> {
     let init_line = lines
         .next()
         .context("expected a message")?
@@ -70,7 +70,7 @@ pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Resul
         bail!("expected the first message to be `init`")
     };
 
-    let node = Node {
+    let node = NodeInit {
         id: String::from(body.node_id),
         node_ids: body.node_ids,
     };
