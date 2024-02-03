@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self};
 use std::io::{Lines, StdinLock, StdoutLock, Write};
+use std::mem;
 
 #[derive(Deserialize, Serialize, Debug)]
 struct Broadcast {
@@ -42,11 +43,10 @@ struct TopologyOK {
 }
 
 #[derive(Deserialize, Debug)]
-struct GossipIn<'a> {
+struct GossipIn {
     msg_id: usize,
     messages: Vec<i32>,
-    #[serde(borrow)]
-    nodes: Vec<&'a str>,
+    nodes: Vec<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -64,7 +64,7 @@ struct GossipOK {
 
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type")]
-enum BodyIn<'a> {
+enum BodyIn {
     #[serde(rename = "broadcast")]
     Broadcast(Broadcast),
     #[serde(rename = "read")]
@@ -72,8 +72,7 @@ enum BodyIn<'a> {
     #[serde(rename = "topology")]
     Topology(Topology),
     #[serde(rename = "gossip")]
-    #[serde(borrow)]
-    Gossip(GossipIn<'a>),
+    Gossip(GossipIn),
     #[serde(rename = "gossip_ok")]
     GossipOK(GossipOK),
 }
@@ -115,6 +114,22 @@ impl<'a> Node<'a> {
         send_message(&mut self.stdout, &self.init.id, dest, body).context("sending message")
     }
 
+    fn gossip_to(&mut self, group: &[String], messages: &[i32]) -> Result<()> {
+        if let Some((head, tail)) = group.split_first() {
+            let msg_id = self.next_message_id();
+            self.send_message(
+                head,
+                BodyOut::Gossip(GossipOut {
+                    msg_id,
+                    messages,
+                    nodes: tail,
+                }),
+            )?;
+        }
+
+        Ok(())
+    }
+
     fn main(&mut self, lines: &mut Lines<StdinLock>) -> Result<()> {
         for line in lines {
             let line = line.context("reading message")?;
@@ -135,34 +150,18 @@ impl<'a> Node<'a> {
                     )?;
 
                     // TODO
-                    let node_ids = self.init.node_ids.clone();
-
-                    let message_id = self.next_message_id();
-                    let mut gossip_to = |group: &[String]| -> Result<()> {
-                        if let Some((head, tail)) = group.split_first() {
-                            self.send_message(
-                                head,
-                                BodyOut::Gossip(GossipOut {
-                                    msg_id: message_id,
-                                    messages: &[body.message],
-                                    nodes: tail,
-                                }),
-                            )?;
-                        }
-
-                        Ok(())
-                    };
-
+                    let node_ids = mem::take(&mut self.init.node_ids);
                     let nodes = node_ids.as_slice();
                     if nodes.len() >= 1 {
                         let (a, b) = nodes.split_at(nodes.len() / 2);
-                        gossip_to(a)?;
-                        gossip_to(b)?;
+                        self.gossip_to(a, &[body.message])?;
+                        self.gossip_to(b, &[body.message])?;
                     }
+                    self.init.node_ids = node_ids
                 }
                 BodyIn::Read(body) => {
                     // TODO
-                    let seen = self.seen.clone();
+                    let seen = mem::take(&mut self.seen);
                     let outgoing = BodyOut::ReadOK(ReadOK {
                         msg_id: self.next_message_id(),
                         in_reply_to: body.msg_id,
@@ -170,6 +169,7 @@ impl<'a> Node<'a> {
                     });
 
                     self.send_message(message.src, outgoing)?;
+                    self.seen = seen;
                 }
                 BodyIn::Topology(body) => {
                     let outgoing = BodyOut::TopologyOK(TopologyOK {
@@ -191,26 +191,10 @@ impl<'a> Node<'a> {
                         }),
                     )?;
 
-                    let mut gossip_to = |group: &[&str]| -> Result<()> {
-                        if let Some((head, tail)) = group.split_first() {
-                            let message_id = self.next_message_id();
-                            self.send_message(
-                                head,
-                                BodyOut::GossipRef(GossipOut {
-                                    msg_id: message_id,
-                                    messages: body.messages.as_slice(),
-                                    nodes: tail,
-                                }),
-                            )?;
-                        }
-
-                        Ok(())
-                    };
-
                     let nodes = body.nodes.as_slice();
                     let (a, b) = nodes.split_at(nodes.len() / 2);
-                    gossip_to(a)?;
-                    gossip_to(b)?;
+                    self.gossip_to(a, body.messages.as_slice())?;
+                    self.gossip_to(b, body.messages.as_slice())?;
                 }
                 BodyIn::GossipOK(_) => {}
             }
