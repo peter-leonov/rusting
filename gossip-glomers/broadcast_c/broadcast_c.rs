@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
-use flyio::{parse_message, send_message, take_init, NodeInit};
+use anyhow::{anyhow, Context, Result};
+use flyio::{parse_message, send_message, take_init, Message, NodeInit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self};
-use std::io::{Lines, StdinLock, StdoutLock, Write};
+use std::io::{Lines, StdinLock, StdoutLock};
 use std::mem;
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -88,8 +88,6 @@ enum BodyOut<'a> {
     TopologyOK(TopologyOK),
     #[serde(rename = "gossip")]
     Gossip(GossipOut<'a, String>),
-    #[serde(rename = "gossip")]
-    GossipRef(GossipOut<'a, &'a str>),
     #[serde(rename = "gossip_ok")]
     GossipOK(GossipOK),
 }
@@ -98,6 +96,7 @@ struct Node<'a> {
     message_id: usize,
     init: NodeInit,
     seen: Vec<i32>,
+    lines: Lines<StdinLock<'a>>,
     stdout: StdoutLock<'a>,
 }
 
@@ -130,11 +129,22 @@ impl<'a> Node<'a> {
         Ok(())
     }
 
-    fn main(&mut self, lines: &mut Lines<StdinLock>) -> Result<()> {
-        for line in lines {
-            let line = line.context("reading message")?;
-            // dbg!(&line);
-            let message = parse_message::<BodyIn>(&line)?;
+    fn next(&mut self) -> Option<Result<Message<BodyIn>>> {
+        let Some(line) = self.lines.next() else {
+            return None;
+        };
+
+        match line {
+            Ok(str) => Some(parse_message(&str)),
+            Err(err) => Some(Err(anyhow!(err))),
+        }
+        // let line = line.context("reading message")?;
+    }
+
+    fn main(&mut self) -> Result<()> {
+        loop {
+            let Some(message) = self.next() else { break };
+            let message = message?;
 
             match message.body {
                 BodyIn::Broadcast(body) => {
@@ -142,7 +152,7 @@ impl<'a> Node<'a> {
 
                     let message_id = self.next_message_id();
                     self.send_message(
-                        message.src,
+                        &message.src,
                         BodyOut::BroadcastOK(BroadcastOK {
                             msg_id: message_id,
                             in_reply_to: body.msg_id,
@@ -168,7 +178,7 @@ impl<'a> Node<'a> {
                         messages: &seen,
                     });
 
-                    self.send_message(message.src, outgoing)?;
+                    self.send_message(&message.src, outgoing)?;
                     self.seen = seen;
                 }
                 BodyIn::Topology(body) => {
@@ -177,14 +187,14 @@ impl<'a> Node<'a> {
                         in_reply_to: body.msg_id,
                     });
 
-                    self.send_message(message.src, outgoing)?;
+                    self.send_message(&message.src, outgoing)?;
                 }
                 BodyIn::Gossip(body) => {
                     self.seen.extend_from_slice(body.messages.as_slice());
 
                     let message_id = self.next_message_id();
                     self.send_message(
-                        message.src,
+                        &message.src,
                         BodyOut::GossipOK(GossipOK {
                             msg_id: message_id,
                             in_reply_to: body.msg_id,
@@ -214,8 +224,9 @@ pub fn main() -> Result<()> {
         message_id: 0,
         init: node_init,
         seen: Vec::<i32>::with_capacity(100),
+        lines,
         stdout,
     };
 
-    node.main(&mut lines)
+    node.main()
 }
