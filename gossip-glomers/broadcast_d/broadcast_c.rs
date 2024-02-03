@@ -98,6 +98,7 @@ enum BodyOut<'a> {
 struct Node {
     message_id: usize,
     init: NodeInit,
+    seen: Vec<i32>,
 }
 
 impl Node {
@@ -107,8 +108,6 @@ impl Node {
     }
 
     fn main(&mut self, lines: &mut Lines<StdinLock>, mut stdout: &mut StdoutLock) -> Result<()> {
-        let mut seen = Vec::<i32>::with_capacity(100);
-
         for line in lines {
             let line = line.context("reading message")?;
             // dbg!(&line);
@@ -116,7 +115,7 @@ impl Node {
 
             match message.body {
                 BodyIn::Broadcast(body) => {
-                    seen.push(body.message);
+                    self.seen.push(body.message);
 
                     let message_id = self.next_message_id();
                     send_message(
@@ -158,7 +157,7 @@ impl Node {
                     let outgoing = BodyOut::ReadOK(ReadOK {
                         msg_id: self.next_message_id(),
                         in_reply_to: body.msg_id,
-                        messages: &seen,
+                        messages: &self.seen,
                     });
 
                     send_message(&mut stdout, &self.init.id, message.src, outgoing)?;
@@ -172,7 +171,7 @@ impl Node {
                     send_message(&mut stdout, &self.init.id, message.src, outgoing)?;
                 }
                 BodyIn::Gossip(body) => {
-                    seen.extend_from_slice(body.messages.as_slice());
+                    self.seen.extend_from_slice(body.messages.as_slice());
 
                     let message_id = self.next_message_id();
                     send_message(
@@ -225,6 +224,7 @@ pub fn main() -> Result<()> {
     let mut node = Node {
         message_id: 0,
         init: node_init,
+        seen: Vec::<i32>::with_capacity(100),
     };
 
     node.main(&mut lines, &mut stdout)
