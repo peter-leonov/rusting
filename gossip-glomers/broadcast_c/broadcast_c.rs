@@ -95,19 +95,27 @@ enum BodyOut<'a> {
     GossipOK(GossipOK),
 }
 
-struct Node {
+struct Node<'a> {
     message_id: usize,
     init: NodeInit,
     seen: Vec<i32>,
+    stdout: StdoutLock<'a>,
 }
 
-impl Node {
+impl<'a> Node<'a> {
     fn next_message_id(&mut self) -> usize {
         self.message_id += 1;
         self.message_id
     }
 
-    fn main(&mut self, lines: &mut Lines<StdinLock>, mut stdout: &mut StdoutLock) -> Result<()> {
+    fn send_message<'b, T>(&mut self, dest: &'b str, body: T) -> Result<()>
+    where
+        T: Serialize,
+    {
+        send_message(&mut self.stdout, &self.init.id, dest, body).context("sending message")
+    }
+
+    fn main(&mut self, lines: &mut Lines<StdinLock>) -> Result<()> {
         for line in lines {
             let line = line.context("reading message")?;
             // dbg!(&line);
@@ -118,9 +126,7 @@ impl Node {
                     self.seen.push(body.message);
 
                     let message_id = self.next_message_id();
-                    send_message(
-                        stdout,
-                        &self.init.id,
+                    self.send_message(
                         message.src,
                         BodyOut::BroadcastOK(BroadcastOK {
                             msg_id: message_id,
@@ -128,12 +134,13 @@ impl Node {
                         }),
                     )?;
 
+                    // TODO
+                    let node_ids = self.init.node_ids.clone();
+
                     let message_id = self.next_message_id();
                     let mut gossip_to = |group: &[String]| -> Result<()> {
                         if let Some((head, tail)) = group.split_first() {
-                            send_message(
-                                stdout,
-                                &self.init.id,
+                            self.send_message(
                                 head,
                                 BodyOut::Gossip(GossipOut {
                                     msg_id: message_id,
@@ -146,7 +153,7 @@ impl Node {
                         Ok(())
                     };
 
-                    let nodes = self.init.node_ids.as_slice();
+                    let nodes = node_ids.as_slice();
                     if nodes.len() >= 1 {
                         let (a, b) = nodes.split_at(nodes.len() / 2);
                         gossip_to(a)?;
@@ -154,13 +161,15 @@ impl Node {
                     }
                 }
                 BodyIn::Read(body) => {
+                    // TODO
+                    let seen = self.seen.clone();
                     let outgoing = BodyOut::ReadOK(ReadOK {
                         msg_id: self.next_message_id(),
                         in_reply_to: body.msg_id,
-                        messages: &self.seen,
+                        messages: &seen,
                     });
 
-                    send_message(&mut stdout, &self.init.id, message.src, outgoing)?;
+                    self.send_message(message.src, outgoing)?;
                 }
                 BodyIn::Topology(body) => {
                     let outgoing = BodyOut::TopologyOK(TopologyOK {
@@ -168,15 +177,13 @@ impl Node {
                         in_reply_to: body.msg_id,
                     });
 
-                    send_message(&mut stdout, &self.init.id, message.src, outgoing)?;
+                    self.send_message(message.src, outgoing)?;
                 }
                 BodyIn::Gossip(body) => {
                     self.seen.extend_from_slice(body.messages.as_slice());
 
                     let message_id = self.next_message_id();
-                    send_message(
-                        stdout,
-                        &self.init.id,
+                    self.send_message(
                         message.src,
                         BodyOut::GossipOK(GossipOK {
                             msg_id: message_id,
@@ -187,9 +194,7 @@ impl Node {
                     let mut gossip_to = |group: &[&str]| -> Result<()> {
                         if let Some((head, tail)) = group.split_first() {
                             let message_id = self.next_message_id();
-                            send_message(
-                                stdout,
-                                &self.init.id,
+                            self.send_message(
                                 head,
                                 BodyOut::GossipRef(GossipOut {
                                     msg_id: message_id,
@@ -225,7 +230,8 @@ pub fn main() -> Result<()> {
         message_id: 0,
         init: node_init,
         seen: Vec::<i32>::with_capacity(100),
+        stdout,
     };
 
-    node.main(&mut lines, &mut stdout)
+    node.main(&mut lines)
 }
