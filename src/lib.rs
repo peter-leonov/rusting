@@ -24,9 +24,9 @@ enum Body<'a> {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-pub struct Message<'a, T> {
-    pub src: &'a str,
-    pub dest: &'a str,
+pub struct Message<T> {
+    pub src: String,
+    pub dest: String,
     pub body: T,
 }
 
@@ -46,7 +46,11 @@ pub fn send_message<'a, T>(
 where
     T: Serialize,
 {
-    let message = Message::<T> { src, dest, body };
+    let message = Message::<T> {
+        src: src.into(),
+        dest: dest.into(),
+        body,
+    };
 
     serde_json::to_writer(&mut *stdout, &message)?;
     writeln!(stdout, "")?;
@@ -79,7 +83,7 @@ pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Resul
         in_reply_to: body.msg_id,
     });
 
-    send_message(stdout, &node.id, message.src, outgoing)?;
+    send_message(stdout, &node.id, &message.src, outgoing)?;
 
     Ok(node)
 }
