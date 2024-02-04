@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{bail, Context, Result};
 use flyio::{parse_message, send_message, take_init, Message, NodeInit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -93,6 +93,7 @@ enum BodyOut<'a> {
 }
 
 struct Node<'a> {
+    message_buffer: Vec<Message<BodyIn>>,
     message_id: usize,
     init: NodeInit,
     seen: Vec<i32>,
@@ -113,18 +114,52 @@ impl<'a> Node<'a> {
         send_message(&mut self.stdout, &self.init.id, dest, body).context("sending message")
     }
 
-    fn gossip_to(&mut self, group: &[String], messages: &[i32]) -> Result<()> {
-        if let Some((head, tail)) = group.split_first() {
-            let msg_id = self.next_message_id();
-            self.send_message(
-                head,
-                BodyOut::Gossip(GossipOut {
-                    msg_id,
-                    messages,
-                    nodes: tail,
-                }),
-            )?;
+    fn wait_for(&mut self, src: &str, in_reply_to: usize) -> Result<Message<BodyIn>> {
+        while let Some(res) = self.next() {
+            let Ok(message) = res else {
+                return res;
+            };
+
+            if message.src != src {
+                self.message_buffer.push(message);
+                continue;
+            }
+
+            match message.body {
+                BodyIn::GossipOK(ref body) => {
+                    if body.in_reply_to == in_reply_to {
+                        return Ok(message);
+                    }
+                }
+                _ => {
+                    self.message_buffer.push(message);
+                }
+            }
         }
+
+        bail!(
+            "stdin EOF while waiting for a message from {} in reply to {}",
+            src,
+            in_reply_to
+        )
+    }
+
+    fn gossip_to(&mut self, group: &[String], messages: &[i32]) -> Result<()> {
+        let Some((head, tail)) = group.split_first() else {
+            return Ok(());
+        };
+
+        let msg_id = self.next_message_id();
+        self.send_message(
+            head,
+            BodyOut::Gossip(GossipOut {
+                msg_id,
+                messages,
+                nodes: tail,
+            }),
+        )?;
+
+        self.wait_for(head, msg_id)?;
 
         Ok(())
     }
@@ -198,7 +233,9 @@ impl<'a> Node<'a> {
                     self.gossip_to(a, body.messages.as_slice())?;
                     self.gossip_to(b, body.messages.as_slice())?;
                 }
-                BodyIn::GossipOK(_) => {}
+                BodyIn::GossipOK(_) => {
+                    self.message_buffer.push(message);
+                }
             }
         }
 
@@ -213,6 +250,7 @@ pub fn main() -> Result<()> {
     let node_init = take_init(&mut lines, &mut stdout)?;
 
     let mut node = Node {
+        message_buffer: Vec::with_capacity(100),
         message_id: 0,
         init: node_init,
         seen: Vec::<i32>::with_capacity(100),
