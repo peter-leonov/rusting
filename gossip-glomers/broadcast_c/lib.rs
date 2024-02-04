@@ -64,11 +64,11 @@ pub struct NodeInit {
 }
 
 pub fn take_init(
-    lines: &mut mpsc::Iter<Result<String, std::io::Error>>,
+    lines: &mpsc::Receiver<Result<String, std::io::Error>>,
     stdout: &mut StdoutLock,
 ) -> Result<NodeInit> {
     let init_line = lines
-        .next()
+        .recv()
         .context("expected a message")?
         .context("reading message")?;
 

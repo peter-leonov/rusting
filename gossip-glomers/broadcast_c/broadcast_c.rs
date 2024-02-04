@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use flyio::{parse_message, send_message, take_init, Message, NodeInit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -100,7 +100,7 @@ struct Node<'a> {
     message_id: usize,
     init: NodeInit,
     seen: Vec<i32>,
-    lines: mpsc::Iter<'a, Result<String, std::io::Error>>,
+    lines: mpsc::Receiver<Result<String, std::io::Error>>,
     stdout: StdoutLock<'a>,
 }
 
@@ -168,7 +168,14 @@ impl<'a> Node<'a> {
     }
 
     fn next(&mut self) -> Option<Result<Message<BodyIn>>> {
-        self.lines.next().map(|line| parse_message(&line?))
+        let Ok(line) = self.lines.recv() else {
+            return None;
+        };
+
+        match line {
+            Err(err) => Some(Err(anyhow!(err))),
+            Ok(line) => Some(parse_message(&line)),
+        }
     }
 
     fn main(&mut self) -> Result<()> {
@@ -254,11 +261,9 @@ pub fn main() -> Result<()> {
         }
     });
 
-    let mut lines = lines.iter();
-
     let mut stdout = io::stdout().lock();
 
-    let node_init = take_init(&mut lines, &mut stdout)?;
+    let node_init = take_init(&lines, &mut stdout)?;
 
     let mut node = Node {
         message_buffer: Vec::with_capacity(100),
