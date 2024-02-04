@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::io::{self};
 use std::io::{Lines, StdinLock, StdoutLock};
 use std::mem;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 #[derive(Deserialize, Serialize, Debug)]
 struct Broadcast {
@@ -97,7 +100,7 @@ struct Node<'a> {
     message_id: usize,
     init: NodeInit,
     seen: Vec<i32>,
-    lines: Lines<StdinLock<'a>>,
+    lines: mpsc::Iter<'a, Result<String, std::io::Error>>,
     stdout: StdoutLock<'a>,
 }
 
@@ -244,7 +247,15 @@ impl<'a> Node<'a> {
 }
 
 pub fn main() -> Result<()> {
-    let mut lines = io::stdin().lines();
+    let (send, lines) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in io::stdin().lines() {
+            send.send(line).unwrap();
+        }
+    });
+
+    let mut lines = lines.iter();
+
     let mut stdout = io::stdout().lock();
 
     let node_init = take_init(&mut lines, &mut stdout)?;
@@ -258,5 +269,10 @@ pub fn main() -> Result<()> {
         stdout,
     };
 
-    node.main()
+    node.main()?;
+
+    // TODO: fix anyhow
+    reader.join().unwrap();
+
+    Ok(())
 }
