@@ -2,10 +2,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use flyio::{parse_message, send_message, take_init, Message, NodeInit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::StdoutLock;
 use std::io::{self};
-use std::io::{Lines, StdinLock, StdoutLock};
 use std::mem;
-use std::sync::mpsc;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
@@ -117,52 +117,67 @@ impl<'a> Node<'a> {
         send_message(&mut self.stdout, &self.init.id, dest, body).context("sending message")
     }
 
-    fn wait_for(&mut self, src: &str, in_reply_to: usize) -> Result<Message<BodyIn>> {
-        while let Some(res) = self.next() {
-            let Ok(message) = res else {
-                return res;
+    fn wait_for(&mut self, src: &str, in_reply_to: usize) -> Option<Result<Message<BodyIn>>> {
+        loop {
+            let Some(next) = self.next_timeout() else {
+                return None;
             };
 
-            if message.src != src {
-                self.message_buffer.push(message);
-                continue;
-            }
+            if let Some(res) = next {
+                let Ok(message) = res else {
+                    return Some(res);
+                };
 
-            match message.body {
-                BodyIn::GossipOK(ref body) => {
-                    if body.in_reply_to == in_reply_to {
-                        return Ok(message);
+                if message.src != src {
+                    self.message_buffer.push(message);
+                    continue;
+                }
+
+                match message.body {
+                    BodyIn::GossipOK(ref body) => {
+                        if body.in_reply_to == in_reply_to {
+                            return Some(Ok(message));
+                        }
+                    }
+                    _ => {
+                        self.message_buffer.push(message);
                     }
                 }
-                _ => {
-                    self.message_buffer.push(message);
-                }
+            } else {
+                return Some(Err(anyhow!(
+                    "stdin EOF while waiting for a message from {} in reply to {}",
+                    src,
+                    in_reply_to
+                )));
             }
         }
-
-        bail!(
-            "stdin EOF while waiting for a message from {} in reply to {}",
-            src,
-            in_reply_to
-        )
     }
 
     fn gossip_to(&mut self, group: &[String], messages: &[i32]) -> Result<()> {
-        let Some((head, tail)) = group.split_first() else {
+        let Some((dest, tail)) = group.split_first() else {
             return Ok(());
         };
 
         let msg_id = self.next_message_id();
-        self.send_message(
-            head,
-            BodyOut::Gossip(GossipOut {
-                msg_id,
-                messages,
-                nodes: tail,
-            }),
-        )?;
 
-        self.wait_for(head, msg_id)?;
+        loop {
+            self.send_message(
+                dest,
+                BodyOut::Gossip(GossipOut {
+                    msg_id,
+                    messages,
+                    nodes: tail,
+                }),
+            )?;
+
+            let Some(ok) = self.wait_for(dest, msg_id) else {
+                continue;
+            };
+
+            ok?;
+
+            break;
+        }
 
         Ok(())
     }
@@ -175,6 +190,19 @@ impl<'a> Node<'a> {
         match line {
             Err(err) => Some(Err(anyhow!(err))),
             Ok(line) => Some(parse_message(&line)),
+        }
+    }
+
+    fn next_timeout(&mut self) -> Option<Option<Result<Message<BodyIn>>>> {
+        match self.lines.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) => match line {
+                Err(err) => Some(Some(Err(anyhow!(err)))),
+                Ok(line) => Some(Some(parse_message(&line))),
+            },
+            Err(err) => match err {
+                RecvTimeoutError::Timeout => None,
+                RecvTimeoutError::Disconnected => Some(None),
+            },
         }
     }
 
