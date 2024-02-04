@@ -130,15 +130,7 @@ impl<'a> Node<'a> {
     }
 
     fn next(&mut self) -> Option<Result<Message<BodyIn>>> {
-        let Some(line) = self.lines.next() else {
-            return None;
-        };
-
-        match line {
-            Ok(str) => Some(parse_message(&str)),
-            Err(err) => Some(Err(anyhow!(err))),
-        }
-        // let line = line.context("reading message")?;
+        self.lines.next().map(|line| parse_message(&line?))
     }
 
     fn main(&mut self) -> Result<()> {
