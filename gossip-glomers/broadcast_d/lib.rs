@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::io::{Lines, StdinLock, StdoutLock, Write};
+use std::io::{StdoutLock, Write};
+use std::sync::mpsc;
 
 #[derive(Deserialize, Serialize, Debug)]
 struct InitBody<'a> {
@@ -62,7 +63,10 @@ pub struct NodeInit {
     pub node_ids: Vec<String>,
 }
 
-pub fn take_init(lines: &mut Lines<StdinLock>, stdout: &mut StdoutLock) -> Result<NodeInit> {
+pub fn take_init(
+    lines: &mut mpsc::Iter<Result<String, std::io::Error>>,
+    stdout: &mut StdoutLock,
+) -> Result<NodeInit> {
     let init_line = lines
         .next()
         .context("expected a message")?
