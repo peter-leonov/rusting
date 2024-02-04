@@ -169,7 +169,9 @@ impl<'a> Node<'a> {
                     nodes: tail,
                 }),
             )?;
-
+            // As long as we wait for the ok right after the message
+            // there should be no overlaps, thus no need to account
+            // for `*_ok`s getting buffered.
             let Some(ok) = self.wait_for(dest, msg_id) else {
                 continue;
             };
@@ -193,8 +195,18 @@ impl<'a> Node<'a> {
         }
     }
 
+    fn buffered_next(&mut self) -> Option<Result<Message<BodyIn>>> {
+        // Using pop() is fine, the order of delivery the main loop messages
+        // should not matter.
+        if let Some(message) = self.message_buffer.pop() {
+            return Some(Ok(message));
+        }
+
+        self.next()
+    }
+
     fn next_timeout(&mut self) -> Option<Option<Result<Message<BodyIn>>>> {
-        match self.lines.recv_timeout(Duration::from_millis(100)) {
+        match self.lines.recv_timeout(Duration::from_millis(250)) {
             Ok(line) => match line {
                 Err(err) => Some(Some(Err(anyhow!(err)))),
                 Ok(line) => Some(Some(parse_message(&line))),
@@ -208,7 +220,9 @@ impl<'a> Node<'a> {
 
     fn main(&mut self) -> Result<()> {
         loop {
-            let Some(message) = self.next() else { break };
+            let Some(message) = self.buffered_next() else {
+                break;
+            };
             let message = message?;
 
             match message.body {
@@ -272,7 +286,7 @@ impl<'a> Node<'a> {
                     self.gossip_to(b, body.messages.as_slice())?;
                 }
                 BodyIn::GossipOK(_) => {
-                    self.message_buffer.push(message);
+                    bail!("can't procees an *_ok message in the main loop")
                 }
             }
         }
