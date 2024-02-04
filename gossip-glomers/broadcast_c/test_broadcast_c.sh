@@ -7,4 +7,6 @@ set -e
   echo '{"src":"p1", "dest": "n1", "body":{"type": "broadcast", "msg_id": 2, "message": 1000}}'
   echo '{"src":"p1", "dest": "n1", "body":{"type": "read", "msg_id": 3}}'
   echo '{"src":"n2", "dest": "n1", "body":{"type": "gossip", "msg_id": 3, "messages": [2000, 3000], "nodes": ["n2","n3","n4"]}}'
+  echo '{"src":"n2", "dest": "n1", "body":{"type": "gossip_ok", "msg_id": 4, "in_reply_to": 2 }}'
+  echo '{"src":"n6", "dest": "n1", "body":{"type": "gossip_ok", "msg_id": 1, "in_reply_to": 3 }}'
  } | cargo run --bin broadcast_c
