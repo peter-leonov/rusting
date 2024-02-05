@@ -100,7 +100,8 @@ enum BodyOut<'a> {
 struct Node<'a> {
     message_id: usize,
     init: NodeInit,
-    seen: HashSet<i32>,
+    my: HashSet<i32>,
+    theirs: HashSet<i32>,
     lines: mpsc::Receiver<Result<String, std::io::Error>>,
     stdout: StdoutLock<'a>,
 }
@@ -172,7 +173,7 @@ impl<'a> Node<'a> {
 
             match message.body {
                 BodyIn::Broadcast(body) => {
-                    self.seen.insert(body.message);
+                    self.my.insert(body.message);
 
                     let message_id = self.next_message_id();
                     self.send_message(
@@ -184,7 +185,9 @@ impl<'a> Node<'a> {
                     )?;
                 }
                 BodyIn::Read(body) => {
-                    let seen = self.seen.clone().into_iter().collect();
+                    let mut seen = Vec::new();
+                    seen.extend(self.my.clone().into_iter());
+                    seen.extend(self.theirs.clone().into_iter());
                     let outgoing = BodyOut::ReadOK(ReadOK {
                         msg_id: self.next_message_id(),
                         in_reply_to: body.msg_id,
@@ -202,7 +205,7 @@ impl<'a> Node<'a> {
                     self.send_message(&message.src, outgoing)?;
                 }
                 BodyIn::Gossip(body) => {
-                    self.seen.extend(&body.messages);
+                    self.theirs.extend(&body.messages);
 
                     let nodes = body.nodes.as_slice();
                     let (a, b) = nodes.split_at(nodes.len() / 2);
@@ -212,7 +215,7 @@ impl<'a> Node<'a> {
                 BodyIn::Tick(_) => {
                     // TODO
                     let node_ids = mem::take(&mut self.init.node_ids);
-                    let seen_vec: Vec<_> = self.seen.clone().into_iter().collect();
+                    let seen_vec: Vec<_> = self.my.clone().into_iter().collect();
                     let nodes = node_ids.as_slice();
                     if nodes.len() >= 1 {
                         let (a, b) = nodes.split_at(nodes.len() / 2);
@@ -255,7 +258,8 @@ pub fn main() -> Result<()> {
     let mut node = Node {
         message_id: 0,
         init: node_init,
-        seen: HashSet::with_capacity(256),
+        my: HashSet::with_capacity(256),
+        theirs: HashSet::with_capacity(256),
         lines,
         stdout,
     };
