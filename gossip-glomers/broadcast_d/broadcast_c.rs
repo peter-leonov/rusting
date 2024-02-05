@@ -76,8 +76,6 @@ enum BodyIn {
     Topology(Topology),
     #[serde(rename = "gossip")]
     Gossip(GossipIn),
-    #[serde(rename = "gossip_ok")]
-    GossipOK(GossipOK),
 }
 
 #[derive(Serialize, Debug)]
@@ -91,12 +89,9 @@ enum BodyOut<'a> {
     TopologyOK(TopologyOK),
     #[serde(rename = "gossip")]
     Gossip(GossipOut<'a, String>),
-    #[serde(rename = "gossip_ok")]
-    GossipOK(GossipOK),
 }
 
 struct Node<'a> {
-    message_buffer: Vec<Message<BodyIn>>,
     message_id: usize,
     init: NodeInit,
     seen: Vec<i32>,
@@ -117,42 +112,6 @@ impl<'a> Node<'a> {
         send_message(&mut self.stdout, &self.init.id, dest, body).context("sending message")
     }
 
-    fn wait_for(&mut self, src: &str, in_reply_to: usize) -> Option<Result<Message<BodyIn>>> {
-        loop {
-            let Some(next) = self.next_timeout() else {
-                return None;
-            };
-
-            if let Some(res) = next {
-                let Ok(message) = res else {
-                    return Some(res);
-                };
-
-                if message.src != src {
-                    self.message_buffer.push(message);
-                    continue;
-                }
-
-                match message.body {
-                    BodyIn::GossipOK(ref body) => {
-                        if body.in_reply_to == in_reply_to {
-                            return Some(Ok(message));
-                        }
-                    }
-                    _ => {
-                        self.message_buffer.push(message);
-                    }
-                }
-            } else {
-                return Some(Err(anyhow!(
-                    "stdin EOF while waiting for a message from {} in reply to {}",
-                    src,
-                    in_reply_to
-                )));
-            }
-        }
-    }
-
     fn gossip_to(&mut self, group: &[String], messages: &[i32]) -> Result<()> {
         let Some((dest, tail)) = group.split_first() else {
             return Ok(());
@@ -160,26 +119,14 @@ impl<'a> Node<'a> {
 
         let msg_id = self.next_message_id();
 
-        loop {
-            self.send_message(
-                dest,
-                BodyOut::Gossip(GossipOut {
-                    msg_id,
-                    messages,
-                    nodes: tail,
-                }),
-            )?;
-            // As long as we wait for the ok right after the message
-            // there should be no overlaps, thus no need to account
-            // for `*_ok`s getting buffered.
-            let Some(ok) = self.wait_for(dest, msg_id) else {
-                continue;
-            };
-
-            ok?;
-
-            break;
-        }
+        self.send_message(
+            dest,
+            BodyOut::Gossip(GossipOut {
+                msg_id,
+                messages,
+                nodes: tail,
+            }),
+        )?;
 
         Ok(())
     }
@@ -195,35 +142,17 @@ impl<'a> Node<'a> {
         }
     }
 
-    fn buffered_next(&mut self) -> Option<Result<Message<BodyIn>>> {
-        // Using pop() is fine, the order of delivery the main loop messages
-        // should not matter.
-        if let Some(message) = self.message_buffer.pop() {
-            return Some(Ok(message));
-        }
-
-        self.next()
-    }
-
-    fn next_timeout(&mut self) -> Option<Option<Result<Message<BodyIn>>>> {
-        match self.lines.recv_timeout(Duration::from_millis(250)) {
-            Ok(line) => match line {
-                Err(err) => Some(Some(Err(anyhow!(err)))),
-                Ok(line) => Some(Some(parse_message(&line))),
-            },
-            Err(err) => match err {
-                RecvTimeoutError::Timeout => None,
-                RecvTimeoutError::Disconnected => Some(None),
-            },
-        }
-    }
-
     fn main(&mut self) -> Result<()> {
         loop {
-            let Some(message) = self.buffered_next() else {
+            let Some(message) = self.next() else {
                 break;
             };
-            let message = message?;
+            let Ok(message) = message else {
+                if let Err(err) = message {
+                    eprintln!("Application error: {err}");
+                };
+                continue;
+            };
 
             match message.body {
                 BodyIn::Broadcast(body) => {
@@ -271,22 +200,10 @@ impl<'a> Node<'a> {
                 BodyIn::Gossip(body) => {
                     self.seen.extend_from_slice(body.messages.as_slice());
 
-                    let message_id = self.next_message_id();
-                    self.send_message(
-                        &message.src,
-                        BodyOut::GossipOK(GossipOK {
-                            msg_id: message_id,
-                            in_reply_to: body.msg_id,
-                        }),
-                    )?;
-
                     let nodes = body.nodes.as_slice();
                     let (a, b) = nodes.split_at(nodes.len() / 2);
                     self.gossip_to(a, body.messages.as_slice())?;
                     self.gossip_to(b, body.messages.as_slice())?;
-                }
-                BodyIn::GossipOK(_) => {
-                    bail!("can't procees an *_ok message in the main loop")
                 }
             }
         }
@@ -308,7 +225,6 @@ pub fn main() -> Result<()> {
     let node_init = take_init(&lines, &mut stdout)?;
 
     let mut node = Node {
-        message_buffer: Vec::with_capacity(100),
         message_id: 0,
         init: node_init,
         seen: Vec::<i32>::with_capacity(100),
