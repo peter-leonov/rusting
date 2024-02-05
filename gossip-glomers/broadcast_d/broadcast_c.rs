@@ -1,11 +1,13 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use flyio::{parse_message, send_message, take_init, Message, NodeInit};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::io::StdoutLock;
 use std::io::{self};
 use std::mem;
-use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::mpsc::{self};
+use std::sync::{atomic, Arc};
 use std::thread;
 use std::time::Duration;
 
@@ -66,6 +68,9 @@ struct GossipOK {
 }
 
 #[derive(Deserialize, Debug)]
+struct Tick;
+
+#[derive(Deserialize, Debug)]
 #[serde(tag = "type")]
 enum BodyIn {
     #[serde(rename = "broadcast")]
@@ -76,6 +81,7 @@ enum BodyIn {
     Topology(Topology),
     #[serde(rename = "gossip")]
     Gossip(GossipIn),
+    Tick(Tick),
 }
 
 #[derive(Serialize, Debug)]
@@ -94,7 +100,7 @@ enum BodyOut<'a> {
 struct Node<'a> {
     message_id: usize,
     init: NodeInit,
-    seen: Vec<i32>,
+    seen: HashSet<i32>,
     lines: mpsc::Receiver<Result<String, std::io::Error>>,
     stdout: StdoutLock<'a>,
 }
@@ -138,7 +144,17 @@ impl<'a> Node<'a> {
 
         match line {
             Err(err) => Some(Err(anyhow!(err))),
-            Ok(line) => Some(parse_message(&line)),
+            Ok(line) => {
+                if line == "tick" {
+                    Some(Ok(Message {
+                        src: "self".into(),
+                        dest: "self".into(),
+                        body: BodyIn::Tick(Tick),
+                    }))
+                } else {
+                    Some(parse_message(&line))
+                }
+            }
         }
     }
 
@@ -156,7 +172,7 @@ impl<'a> Node<'a> {
 
             match message.body {
                 BodyIn::Broadcast(body) => {
-                    self.seen.push(body.message);
+                    self.seen.insert(body.message);
 
                     let message_id = self.next_message_id();
                     self.send_message(
@@ -166,20 +182,9 @@ impl<'a> Node<'a> {
                             in_reply_to: body.msg_id,
                         }),
                     )?;
-
-                    // TODO
-                    let node_ids = mem::take(&mut self.init.node_ids);
-                    let nodes = node_ids.as_slice();
-                    if nodes.len() >= 1 {
-                        let (a, b) = nodes.split_at(nodes.len() / 2);
-                        self.gossip_to(a, &[body.message])?;
-                        self.gossip_to(b, &[body.message])?;
-                    }
-                    self.init.node_ids = node_ids
                 }
                 BodyIn::Read(body) => {
-                    // TODO
-                    let seen = mem::take(&mut self.seen);
+                    let seen = self.seen.clone().into_iter().collect();
                     let outgoing = BodyOut::ReadOK(ReadOK {
                         msg_id: self.next_message_id(),
                         in_reply_to: body.msg_id,
@@ -187,7 +192,6 @@ impl<'a> Node<'a> {
                     });
 
                     self.send_message(&message.src, outgoing)?;
-                    self.seen = seen;
                 }
                 BodyIn::Topology(body) => {
                     let outgoing = BodyOut::TopologyOK(TopologyOK {
@@ -198,12 +202,24 @@ impl<'a> Node<'a> {
                     self.send_message(&message.src, outgoing)?;
                 }
                 BodyIn::Gossip(body) => {
-                    self.seen.extend_from_slice(body.messages.as_slice());
+                    self.seen.extend(&body.messages);
 
                     let nodes = body.nodes.as_slice();
                     let (a, b) = nodes.split_at(nodes.len() / 2);
                     self.gossip_to(a, body.messages.as_slice())?;
                     self.gossip_to(b, body.messages.as_slice())?;
+                }
+                BodyIn::Tick(_) => {
+                    // TODO
+                    let node_ids = mem::take(&mut self.init.node_ids);
+                    let seen_vec: Vec<_> = self.seen.clone().into_iter().collect();
+                    let nodes = node_ids.as_slice();
+                    if nodes.len() >= 1 {
+                        let (a, b) = nodes.split_at(nodes.len() / 2);
+                        self.gossip_to(a, &seen_vec)?;
+                        self.gossip_to(b, &seen_vec)?;
+                    }
+                    self.init.node_ids = node_ids;
                 }
             }
         }
@@ -214,10 +230,22 @@ impl<'a> Node<'a> {
 
 pub fn main() -> Result<()> {
     let (send, lines) = mpsc::channel();
+
+    let timer_send = send.clone();
+    let timer_on = Arc::new(atomic::AtomicBool::new(true));
+    let timer_on_clone = timer_on.clone();
+    let timer = thread::spawn(move || {
+        while timer_on_clone.load(atomic::Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(250));
+            timer_send.send(Ok("tick".into())).unwrap();
+        }
+    });
+
     let reader = thread::spawn(move || {
         for line in io::stdin().lines() {
             send.send(line).unwrap();
         }
+        timer_on.store(false, atomic::Ordering::Relaxed);
     });
 
     let mut stdout = io::stdout().lock();
@@ -227,13 +255,14 @@ pub fn main() -> Result<()> {
     let mut node = Node {
         message_id: 0,
         init: node_init,
-        seen: Vec::<i32>::with_capacity(100),
+        seen: HashSet::with_capacity(256),
         lines,
         stdout,
     };
 
     node.main()?;
 
+    timer.join().unwrap();
     // TODO: fix anyhow
     reader.join().unwrap();
 
