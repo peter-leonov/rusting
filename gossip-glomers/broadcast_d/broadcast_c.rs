@@ -49,7 +49,7 @@ struct TopologyOK {
 
 #[derive(Deserialize, Debug)]
 struct GossipIn {
-    msg_id: usize,
+    // msg_id: usize,
     messages: Vec<i32>,
     nodes: Vec<String>,
 }

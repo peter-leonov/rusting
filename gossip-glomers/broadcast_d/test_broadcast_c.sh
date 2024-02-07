@@ -8,4 +8,4 @@ set -e
   echo '{"src":"p1", "dest": "n1", "body":{"type": "read", "msg_id": 3}}'
   echo '{"src":"p1", "dest": "n1", "body":{"type": "read", "msg_id": 4}}'
   echo '{"src":"n2", "dest": "n1", "body":{"type": "gossip", "msg_id": 2, "messages": [2000, 3000], "nodes": ["n2","n3","n4"]}}'
- } | cargo run --bin broadcast_c
+} | cargo run --bin broadcast_c
