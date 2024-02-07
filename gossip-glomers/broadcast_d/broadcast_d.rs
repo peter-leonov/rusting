@@ -239,7 +239,7 @@ pub fn main() -> Result<()> {
     let timer_on_clone = timer_on.clone();
     let timer = thread::spawn(move || {
         while timer_on_clone.load(atomic::Ordering::Relaxed) {
-            thread::sleep(Duration::from_millis(250));
+            thread::sleep(Duration::from_millis(750));
             timer_send.send(Ok("tick".into())).unwrap();
         }
     });
