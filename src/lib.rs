@@ -58,6 +58,7 @@ where
     Ok(stdout.flush()?)
 }
 
+#[derive(Debug)]
 pub struct NodeInit {
     pub id: String,
     pub node_ids: Vec<String>,
@@ -88,6 +89,21 @@ pub fn take_init(
     });
 
     send_message(stdout, &node.id, &message.src, outgoing)?;
+
+    Ok(node)
+}
+
+pub fn take_init_line(init_line: &str) -> Result<NodeInit> {
+    let message = parse_message::<Body>(&init_line)?;
+
+    let Body::Init(body) = message.body else {
+        bail!("expected the first message to be `init`")
+    };
+
+    let node = NodeInit {
+        id: String::from(body.node_id),
+        node_ids: body.node_ids,
+    };
 
     Ok(node)
 }
