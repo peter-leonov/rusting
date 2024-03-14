@@ -114,31 +114,25 @@ async fn my_sleep(delay: f32) {
     rx.next().await;
 }
 
-struct Listener {
+struct Dispatcher {
     broadcast: Vec<Box<dyn Fn(Broadcast) -> Pin<Box<dyn Future<Output = Result<bool>>>>>>,
+    rx: Receiver<String>,
 }
 
-impl Listener {
-    fn new() -> Self {
-        Listener {
+impl Dispatcher {
+    fn new(rx: Receiver<String>) -> Self {
+        Dispatcher {
             broadcast: Vec::new(),
+            rx,
         }
     }
 
-    async fn process(&mut self, mut rx: Receiver<String>) -> Result<()> {
-        self.broadcast.push(Box::new(|body| {
-            Box::pin(async {
-                dbg!("first");
-                dbg!(body);
-                Ok(false)
-            })
-        }));
-
-        while let Ok(line) = rx.recv().await {
+    async fn process(&mut self) -> Result<()> {
+        while let Ok(line) = self.rx.recv().await {
             // my_sleep(0.250).await;
 
             let message = parse_message::<BodyIn>(&line)?;
-            dbg!(&message);
+            // dbg!(&message);
             match message.body {
                 BodyIn::Broadcast(body) => {
                     // dbg!(body);
@@ -149,14 +143,6 @@ impl Listener {
                         }
                     }
                     self.broadcast = add_back;
-
-                    self.broadcast.push(Box::new(|body| {
-                        Box::pin(async {
-                            dbg!("second");
-                            dbg!(body);
-                            Ok(true)
-                        })
-                    }));
                 }
                 _ => {
                     todo!();
@@ -164,20 +150,51 @@ impl Listener {
             }
         }
 
-        rx.close();
+        self.rx.close();
         Ok(())
     }
 }
 
+struct Node {
+    message_id: usize,
+    init: NodeInit,
+    my: HashSet<i32>,
+    theirs: HashSet<i32>,
+}
+
 async fn start(rx: Receiver<String>, tx: Sender<String>) -> Result<()> {
-    tx.send("asdfsd".into()).await?;
+    tx.send("it has begun!".into()).await?;
 
     let init_line = rx.recv().await?;
 
     let node_init = take_init_line(&init_line)?;
-    dbg!(node_init);
 
-    Listener::new().process(rx).await?;
+    let mut node = Node {
+        message_id: 0,
+        init: node_init,
+        my: HashSet::with_capacity(256),
+        theirs: HashSet::with_capacity(256),
+    };
+
+    // sharing mutable node is gonna be a nightmare
+    // instead of using Cell etc just wrap the listener
+    // and provide a mutable node ref to each of them
+    // in the dispatcher process loop
+    // OR even better try doing something like
+    // Dispatcher::wait_for_broadcast("id").await
+    // which is the end goal anyways
+
+    let mut listener = Dispatcher::new(rx); //;
+
+    listener.broadcast.push(Box::new(|body| {
+        Box::pin(async {
+            dbg!("second");
+            dbg!(body);
+            Ok(true)
+        })
+    }));
+
+    listener.process().await?;
 
     Ok(())
 }
@@ -189,7 +206,6 @@ pub fn main() -> Result<()> {
         for line in io::stdin().lines() {
             tx.try_send(line?)?;
         }
-
         Ok(())
     });
 
@@ -199,7 +215,6 @@ pub fn main() -> Result<()> {
         while let Ok(line) = rx.recv_blocking() {
             dbg!(line);
         }
-        dbg!("!!!!!!!!!!!!");
         Ok(())
     });
 
