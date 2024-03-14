@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
-use futures::{channel::mpsc, channel::mpsc::Receiver, executor::block_on};
-use futures::{Future, StreamExt};
+use async_channel::{self, Receiver, Sender};
+use futures::{channel::mpsc, executor::block_on};
+use futures::{Future, SinkExt, StreamExt};
 // use futures::Future;
 use flyio::{parse_message, send_message, take_init, take_init_line, Message, NodeInit};
 // use futures::stream::{self, StreamExt};
@@ -113,61 +114,78 @@ async fn my_sleep(delay: f32) {
     rx.next().await;
 }
 
-async fn process(mut rx: Receiver<String>) -> Result<()> {
-    let init_line = rx.next().await.unwrap();
+struct Listener {
+    broadcast: Vec<Box<dyn Fn(Broadcast) -> Pin<Box<dyn Future<Output = Result<bool>>>>>>,
+}
 
-    let node_init = take_init_line(&init_line)?;
-
-    let mut broadcast_listeners: Vec<
-        Box<dyn Fn(Broadcast) -> Pin<Box<dyn Future<Output = Result<bool>>>>>,
-    > = Vec::with_capacity(100);
-
-    broadcast_listeners.push(Box::new(|body| {
-        Box::pin(async {
-            dbg!("first");
-            dbg!(body);
-            Ok(false)
-        })
-    }));
-
-    while let Some(line) = rx.next().await {
-        // my_sleep(0.250).await;
-
-        let message = parse_message::<BodyIn>(&line)?;
-        match message.body {
-            BodyIn::Broadcast(body) => {
-                // dbg!(body);
-                let mut add_back = Vec::with_capacity(100);
-                for f in broadcast_listeners.drain(..) {
-                    if !f(body.clone()).await? {
-                        add_back.push(f);
-                    }
-                }
-                broadcast_listeners = add_back;
-
-                broadcast_listeners.push(Box::new(|body| {
-                    Box::pin(async {
-                        dbg!("second");
-                        dbg!(body);
-                        Ok(true)
-                    })
-                }));
-            }
-            _ => {
-                todo!();
-            }
+impl Listener {
+    fn new() -> Self {
+        Listener {
+            broadcast: Vec::new(),
         }
     }
 
-    rx.close();
+    async fn process(&mut self, mut rx: Receiver<String>) -> Result<()> {
+        self.broadcast.push(Box::new(|body| {
+            Box::pin(async {
+                dbg!("first");
+                dbg!(body);
+                Ok(false)
+            })
+        }));
+
+        while let Ok(line) = rx.recv().await {
+            // my_sleep(0.250).await;
+
+            let message = parse_message::<BodyIn>(&line)?;
+            dbg!(&message);
+            match message.body {
+                BodyIn::Broadcast(body) => {
+                    // dbg!(body);
+                    let mut add_back = Vec::with_capacity(100);
+                    for f in self.broadcast.drain(..) {
+                        if !f(body.clone()).await? {
+                            add_back.push(f);
+                        }
+                    }
+                    self.broadcast = add_back;
+
+                    self.broadcast.push(Box::new(|body| {
+                        Box::pin(async {
+                            dbg!("second");
+                            dbg!(body);
+                            Ok(true)
+                        })
+                    }));
+                }
+                _ => {
+                    todo!();
+                }
+            }
+        }
+
+        rx.close();
+        Ok(())
+    }
+}
+
+async fn start(rx: Receiver<String>, tx: Sender<String>) -> Result<()> {
+    tx.send("asdfsd".into()).await?;
+
+    let init_line = rx.recv().await?;
+
+    let node_init = take_init_line(&init_line)?;
+    dbg!(node_init);
+
+    Listener::new().process(rx).await?;
+
     Ok(())
 }
 
 pub fn main() -> Result<()> {
-    let (tx, rx) = mpsc::channel::<String>(10);
-
-    let lines = thread::spawn(move || -> Result<()> {
-        let mut tx = tx;
+    let (input_tx, input_rx) = async_channel::bounded::<String>(10);
+    let input_thread = thread::spawn(move || -> Result<()> {
+        let tx = input_tx;
         for line in io::stdin().lines() {
             tx.try_send(line?)?;
         }
@@ -175,8 +193,19 @@ pub fn main() -> Result<()> {
         Ok(())
     });
 
-    block_on(process(rx))?;
-    lines.join().unwrap()?;
+    let (output_tx, output_rx) = async_channel::bounded::<String>(10);
+    let output_thread = thread::spawn(move || -> Result<()> {
+        let rx = output_rx;
+        while let Ok(line) = rx.recv_blocking() {
+            dbg!(line);
+        }
+        dbg!("!!!!!!!!!!!!");
+        Ok(())
+    });
+
+    block_on(start(input_rx, output_tx))?;
+    input_thread.join().unwrap()?;
+    output_thread.join().unwrap()?;
 
     Ok(())
 }
