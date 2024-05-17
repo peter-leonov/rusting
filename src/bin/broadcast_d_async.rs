@@ -138,6 +138,9 @@ impl Dispatcher {
                     // dbg!(body);
                     let mut add_back = Vec::with_capacity(100);
                     for f in self.broadcast.drain(..) {
+                        // this .await "blocks" on just one task
+                        // need to "spawn" tasks per "top level" event
+                        // or use a multiplexer like join!
                         if !f(body.clone()).await? {
                             add_back.push(f);
                         }
