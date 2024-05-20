@@ -39,6 +39,9 @@ impl Dispatcher {
         // write an add() function for use in a Listener that returns a future that can be awaited within the Listener
         // pass an immutable reference to Dispatcher to Listeners and store the listeners vec in a Cell?
         // we prob don't even need the Listeners vec, we need the futures vec
+        // -> looks like a wrapper for a one-off channel to me
+        // -> plus an async runtime that supports dynamic task creation, fitting all in one
+        // non "selected" await is not gonna work.
 
         // todo
         // add() a few Listeners and then in the same function try to fire their awaits
