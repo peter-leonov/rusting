@@ -1,94 +1,102 @@
 use anyhow::Result;
-use async_channel::{self, Receiver, Sender};
-use futures::channel::mpsc;
+// use async_channel::{self, Receiver, Sender};
+use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::future::FusedFuture;
-use futures::select;
-use futures::Future;
-use futures::StreamExt;
+// use futures::select;
+// use futures::Future;
+// use futures::StreamExt;
 use futures::{
     future::join_all,
     future::FutureExt, // for `.fuse()`
-    pin_mut,
+                       // pin_mut,
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::mem;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
-type Promise<'a> = Pin<Box<dyn FusedFuture<Output = Result<()>> + 'a>>;
-type Closure<'a> = Box<dyn Fn(&'a Dispatcher) -> Promise<'a>>;
-
-struct Dispatcher<'a> {
-    promises: RefCell<Vec<Promise<'a>>>,
-    channels: RefCell<Vec<(Sender<String>, String)>>,
-}
-
 async fn my_sleep(seconds: f32) {
-    let (mut tx, mut rx) = mpsc::channel::<()>(1);
+    let (tx, rx) = oneshot::channel::<()>();
 
     thread::spawn(move || {
         std::thread::sleep(Duration::from_secs_f32(seconds));
-        tx.try_send(()).unwrap();
+        tx.send(()).unwrap();
     });
 
-    rx.next().await;
+    rx.await.unwrap();
 }
 
-impl<'a> Dispatcher<'a> {
-    fn add(&'a self, cb: Closure<'a>) {
-        let (tx, rx) = async_channel::bounded::<String>(10);
-        let p = cb(self);
+type Promise = Pin<Box<dyn FusedFuture<Output = Result<()>>>>;
+type Closure = Box<dyn Fn(Rc<Inner>) -> Promise>;
+
+struct Inner {
+    promises: RefCell<Vec<Promise>>,
+    channels: RefCell<HashMap<String, oneshot::Sender<String>>>,
+}
+
+impl Inner {
+    fn new() -> Self {
+        Self {
+            promises: RefCell::new(Vec::new()),
+            channels: RefCell::new(HashMap::new()),
+        }
+    }
+
+    async fn listen(&self, val: String) -> String {
+        let (tx, rx) = oneshot::channel::<String>();
+        self.channels.borrow_mut().insert(val, tx);
+        rx.await.unwrap()
+    }
+
+    fn find_channel(&self, name: &str) -> Option<oneshot::Sender<String>> {
+        self.channels.borrow_mut().remove(name)
+    }
+
+    fn fire(&self, name: &str, val: String) {
+        self.find_channel(name)
+            .and_then(|ch| Some(ch.send(val).unwrap()));
+    }
+}
+
+struct Dispatcher {
+    inner: Rc<Inner>,
+}
+
+impl Dispatcher {
+    fn new() -> Self {
+        Self {
+            inner: Rc::new(Inner::new()),
+        }
+    }
+
+    fn add(&self, cb: Closure) {
+        let p = cb(self.inner.clone());
         {
-            let mut promises = self.promises.borrow_mut();
+            let mut promises = self.inner.promises.borrow_mut();
             promises.push(p);
         };
     }
 
-    fn listen(&self, val: String) -> Promise {
-        let (tx, rx) = async_channel::bounded::<String>(1);
-        {
-            let channels = self.channels.borrow_mut();
-            channels.push((tx, val));
-        };
-
-        Box::pin(
-            async move {
-                rx.recv().await?;
-                Ok(())
-            }
-            .fuse(),
-        )
-        // when we .await in the caller, the join_all() below is still blocked
-        // and it does not know about the new channel created here, thus there is
-        // nobody to send(), thus a deadlock is created. channels must be the multiplexer.
-    }
-
     async fn run(&self) -> Result<()> {
-        let mut promises = {
-            let mut promises = self.promises.borrow_mut();
-            mem::replace(promises.as_mut(), Vec::new())
-        };
+        let mut promises = mem::replace(self.inner.promises.borrow_mut().as_mut(), Vec::new());
         // let channels = mem::replace(&mut self.channels, RefCell::new(Vec::new()));
 
         promises.push(Box::pin(
             async move {
-                // Cannot borrow and iterate as the cell is shared
-                // within the listeners.
-                // loop {}
-
-                // for (ch, val) in channels {
-                //     my_sleep(1.0).await;
-                //     ch.send(val).await.unwrap();
-                // }
+                my_sleep(0.5).await;
+                self.inner.fire("a", String::from("aaa"));
+                my_sleep(0.5).await;
+                self.inner.fire("b", String::from("bbb"));
                 Ok(())
             }
             .fuse(),
         ));
 
-        join_all(promises).await;
+        join_all(promises).await.into_iter().collect()
 
         // plan
         // pass the dispatcher to all add()ed functions right away
@@ -108,21 +116,26 @@ impl<'a> Dispatcher<'a> {
 
         // todo
         // [x] add() a few Listeners and then in the same function try to fire their awaits
-
-        Ok(())
     }
 }
 
 async fn start() -> Result<()> {
-    let dispatcher = Dispatcher {
-        promises: RefCell::new(Vec::new()),
-        channels: RefCell::new(Vec::new()),
-    };
+    let dispatcher = Dispatcher::new();
 
-    dispatcher.add(Box::new(|d: &Dispatcher| {
+    dispatcher.add(Box::new(|d| {
         Box::pin(
-            async {
-                dbg!(d.listen(String::from("a")).await.unwrap());
+            async move {
+                dbg!(d.listen(String::from("a")).await);
+                Ok(())
+            }
+            .fuse(),
+        )
+    }));
+
+    dispatcher.add(Box::new(|d| {
+        Box::pin(
+            async move {
+                dbg!(d.listen(String::from("b")).await);
                 Ok(())
             }
             .fuse(),
