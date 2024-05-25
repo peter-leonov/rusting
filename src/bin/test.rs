@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::fmt::Debug;
 // use async_channel::{self, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::executor::block_on;
@@ -33,31 +34,37 @@ async fn my_sleep(seconds: f32) {
 type Promise = Pin<Box<dyn FusedFuture<Output = Result<()>>>>;
 type Closure = Box<dyn Fn(Rc<Inner>) -> Promise>;
 
+trait Message<T> {
+    fn listeners(inner: &Inner) -> &RefCell<Listeners<T>>;
+}
+
+type Listeners<T> = HashMap<String, oneshot::Sender<T>>;
+
 struct Inner {
     promises: RefCell<Vec<Promise>>,
-    channels: RefCell<HashMap<String, oneshot::Sender<String>>>,
+    listeners_string: RefCell<Listeners<String>>,
+    listeners_i32: RefCell<Listeners<i32>>,
 }
 
 impl Inner {
     fn new() -> Self {
         Self {
             promises: RefCell::new(Vec::new()),
-            channels: RefCell::new(HashMap::new()),
+            listeners_string: RefCell::new(HashMap::new()),
+            listeners_i32: RefCell::new(HashMap::new()),
         }
     }
 
-    async fn listen(&self, val: String) -> String {
-        let (tx, rx) = oneshot::channel::<String>();
-        self.channels.borrow_mut().insert(val, tx);
+    async fn listen<T: Message<T> + Debug>(&self, val: String) -> T {
+        let (tx, rx) = oneshot::channel::<T>();
+        T::listeners(self).borrow_mut().insert(val, tx);
         rx.await.unwrap()
     }
 
-    fn find_channel(&self, name: &str) -> Option<oneshot::Sender<String>> {
-        self.channels.borrow_mut().remove(name)
-    }
-
-    fn fire(&self, name: &str, val: String) {
-        self.find_channel(name)
+    fn fire<T: Message<T> + Debug>(&self, name: &str, val: T) {
+        T::listeners(self)
+            .borrow_mut()
+            .remove(name)
             .and_then(|ch| Some(ch.send(val).unwrap()));
     }
 }
@@ -90,7 +97,7 @@ impl Dispatcher {
                 my_sleep(0.5).await;
                 self.inner.fire("a", String::from("aaa"));
                 my_sleep(0.5).await;
-                self.inner.fire("b", String::from("bbb"));
+                self.inner.fire("b", 42);
                 Ok(())
             }
             .fuse(),
@@ -119,13 +126,26 @@ impl Dispatcher {
     }
 }
 
+impl Message<String> for String {
+    fn listeners(inner: &Inner) -> &RefCell<Listeners<Self>> {
+        &inner.listeners_string
+    }
+}
+
+impl Message<i32> for i32 {
+    fn listeners(inner: &Inner) -> &RefCell<Listeners<Self>> {
+        &inner.listeners_i32
+    }
+}
+
 async fn start() -> Result<()> {
     let dispatcher = Dispatcher::new();
 
     dispatcher.add(Box::new(|d| {
         Box::pin(
             async move {
-                dbg!(d.listen(String::from("a")).await);
+                let v: String = d.listen(String::from("a")).await;
+                dbg!(v);
                 Ok(())
             }
             .fuse(),
@@ -135,7 +155,8 @@ async fn start() -> Result<()> {
     dispatcher.add(Box::new(|d| {
         Box::pin(
             async move {
-                dbg!(d.listen(String::from("b")).await);
+                let v: i32 = d.listen(String::from("b")).await;
+                dbg!(v);
                 Ok(())
             }
             .fuse(),
