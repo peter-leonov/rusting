@@ -1,20 +1,11 @@
 use anyhow::Result;
-use std::fmt::Debug;
-// use async_channel::{self, Receiver, Sender};
 use futures::channel::oneshot;
 use futures::executor::block_on;
-use futures::future::FusedFuture;
-// use futures::select;
-// use futures::Future;
-// use futures::StreamExt;
-use futures::{
-    future::join_all,
-    future::FutureExt, // for `.fuse()`
-                       // pin_mut,
-};
+use futures::future::join_all;
+use futures::Future;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::mem;
+use std::fmt::Debug;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::thread;
@@ -31,25 +22,22 @@ async fn my_sleep(seconds: f32) {
     rx.await.unwrap();
 }
 
-type Promise = Pin<Box<dyn FusedFuture<Output = Result<()>>>>;
-type Closure = Box<dyn Fn(Rc<Inner>) -> Promise>;
+type Promise = Pin<Box<dyn Future<Output = ()>>>;
 
 trait Message<T> {
-    fn listeners(inner: &Inner) -> &RefCell<Listeners<T>>;
+    fn listeners(inner: &Dispatcher) -> &RefCell<Listeners<T>>;
 }
 
 type Listeners<T> = HashMap<String, oneshot::Sender<T>>;
 
-struct Inner {
-    promises: RefCell<Vec<Promise>>,
+struct Dispatcher {
     listeners_string: RefCell<Listeners<String>>,
     listeners_i32: RefCell<Listeners<i32>>,
 }
 
-impl Inner {
+impl Dispatcher {
     fn new() -> Self {
         Self {
-            promises: RefCell::new(Vec::new()),
             listeners_string: RefCell::new(HashMap::new()),
             listeners_i32: RefCell::new(HashMap::new()),
         }
@@ -69,82 +57,44 @@ impl Inner {
     }
 }
 
-struct Dispatcher {
-    inner: Rc<Inner>,
-}
-
-impl Dispatcher {
-    fn new() -> Self {
-        Self {
-            inner: Rc::new(Inner::new()),
-        }
-    }
-
-    fn add(&self, cb: Closure) {
-        let p = cb(self.inner.clone());
-        {
-            let mut promises = self.inner.promises.borrow_mut();
-            promises.push(p);
-        };
-    }
-
-    async fn run(&self) -> Result<()> {
-        let promises = mem::replace(self.inner.promises.borrow_mut().as_mut(), Vec::new());
-        join_all(promises).await.into_iter().collect()
-    }
-}
-
 impl Message<String> for String {
-    fn listeners(inner: &Inner) -> &RefCell<Listeners<Self>> {
+    fn listeners(inner: &Dispatcher) -> &RefCell<Listeners<Self>> {
         &inner.listeners_string
     }
 }
 
 impl Message<i32> for i32 {
-    fn listeners(inner: &Inner) -> &RefCell<Listeners<Self>> {
+    fn listeners(inner: &Dispatcher) -> &RefCell<Listeners<Self>> {
         &inner.listeners_i32
     }
 }
 
 async fn start() -> Result<()> {
-    let dispatcher = Dispatcher::new();
+    let d = Rc::new(Dispatcher::new());
 
-    dispatcher.add(Box::new(|d| {
-        Box::pin(
-            async move {
-                let v: String = d.listen(String::from("a")).await;
-                dbg!(v);
-                Ok(())
-            }
-            .fuse(),
-        )
-    }));
+    let d1 = d.clone();
+    let d2 = d.clone();
 
-    dispatcher.add(Box::new(|d| {
-        Box::pin(
-            async move {
-                let v: i32 = d.listen(String::from("b")).await;
-                dbg!(v);
-                Ok(())
-            }
-            .fuse(),
-        )
-    }));
+    let futures = vec![
+        Box::pin(async move {
+            let v: String = d1.listen(String::from("a")).await;
+            dbg!(v);
+        }) as Promise,
+        Box::pin(async move {
+            let v: i32 = d2.listen(String::from("b")).await;
+            dbg!(v);
+        }) as Promise,
+        Box::pin(async move {
+            my_sleep(0.5).await;
+            d.fire("b", 42);
+            my_sleep(0.5).await;
+            d.fire("a", String::from("aaa"));
+        }) as Promise,
+    ];
 
-    dispatcher.add(Box::new(|d| {
-        Box::pin(
-            async move {
-                my_sleep(0.5).await;
-                d.fire("a", String::from("aaa"));
-                my_sleep(0.5).await;
-                d.fire("b", 42);
-                Ok(())
-            }
-            .fuse(),
-        )
-    }));
+    join_all(futures).await;
 
-    dispatcher.run().await
+    Ok(())
 }
 
 pub fn main() -> Result<()> {
