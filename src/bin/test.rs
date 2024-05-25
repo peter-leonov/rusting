@@ -43,10 +43,10 @@ impl Dispatcher {
         }
     }
 
-    async fn listen<T: Message<T> + Debug>(&self, val: String) -> T {
+    fn listen<T: Message<T> + Debug>(&self, val: String) -> impl Future<Output = T> {
         let (tx, rx) = oneshot::channel::<T>();
         T::listeners(self).borrow_mut().insert(val, tx);
-        rx.await.unwrap()
+        async { rx.await.unwrap() }
     }
 
     fn fire<T: Message<T> + Debug>(&self, name: &str, val: T) {
@@ -72,24 +72,38 @@ impl Message<i32> for i32 {
 async fn start() -> Result<()> {
     let d = Rc::new(Dispatcher::new());
 
-    let d1 = d.clone();
-    let d2 = d.clone();
-
-    let futures = vec![
-        Box::pin(async move {
-            let v: String = d1.listen(String::from("a")).await;
-            dbg!(v);
-        }) as Promise,
-        Box::pin(async move {
-            let v: i32 = d2.listen(String::from("b")).await;
-            dbg!(v);
-        }) as Promise,
-        Box::pin(async move {
-            my_sleep(0.5).await;
-            d.fire("b", 42);
-            my_sleep(0.5).await;
-            d.fire("a", String::from("aaa"));
-        }) as Promise,
+    let futures: Vec<Promise> = vec![
+        {
+            let d = d.clone();
+            Box::pin(async move {
+                let v: String = d.listen(String::from("a")).await;
+                dbg!(v);
+            })
+        },
+        {
+            let d = d.clone();
+            Box::pin(async move {
+                let v: String = d.listen(String::from("b")).await;
+                dbg!(v);
+            })
+        },
+        {
+            let d = d.clone();
+            Box::pin(async move {
+                d.fire("a", String::from("a"));
+                my_sleep(0.5).await;
+                d.fire("b", String::from("b"));
+            })
+        },
+        {
+            let d = d.clone();
+            Box::pin(async move {
+                let p = d.listen(String::from("c"));
+                d.fire("c", 42);
+                let v: i32 = p.await;
+                dbg!(v);
+            })
+        },
     ];
 
     join_all(futures).await;
