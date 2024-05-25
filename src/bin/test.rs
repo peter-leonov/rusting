@@ -11,17 +11,19 @@ use futures::{
     future::FutureExt, // for `.fuse()`
     pin_mut,
 };
+use std::cell::RefCell;
 use std::mem;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
-type Promise = Pin<Box<dyn FusedFuture<Output = Result<()>>>>;
-type Closure = Box<dyn Fn(Receiver<String>) -> Promise>;
+type Promise<'a> = Pin<Box<dyn FusedFuture<Output = Result<()>> + 'a>>;
+type Closure<'a> = Box<dyn Fn(&'a Dispatcher) -> Promise<'a>>;
 
-struct Dispatcher {
-    promises: Vec<Promise>,
-    channels: Vec<(Sender<String>, String)>,
+struct Dispatcher<'a> {
+    promises: RefCell<Vec<Promise<'a>>>,
+    channels: RefCell<Vec<(Sender<String>, String)>>,
 }
 
 async fn my_sleep(seconds: f32) {
@@ -35,23 +37,52 @@ async fn my_sleep(seconds: f32) {
     rx.next().await;
 }
 
-impl Dispatcher {
-    fn add(&mut self, cb: Closure, val: String) {
+impl<'a> Dispatcher<'a> {
+    fn add(&'a self, cb: Closure<'a>) {
         let (tx, rx) = async_channel::bounded::<String>(10);
-        self.promises.push(cb(rx));
-        self.channels.push((tx, val));
+        let p = cb(self);
+        {
+            let mut promises = self.promises.borrow_mut();
+            promises.push(p);
+        };
     }
 
-    async fn run(&mut self) -> Result<()> {
-        let mut promises = mem::replace(&mut self.promises, Vec::new());
-        let channels = mem::replace(&mut self.channels, Vec::new());
+    fn listen(&self, val: String) -> Promise {
+        let (tx, rx) = async_channel::bounded::<String>(1);
+        {
+            let channels = self.channels.borrow_mut();
+            channels.push((tx, val));
+        };
+
+        Box::pin(
+            async move {
+                rx.recv().await?;
+                Ok(())
+            }
+            .fuse(),
+        )
+        // when we .await in the caller, the join_all() below is still blocked
+        // and it does not know about the new channel created here, thus there is
+        // nobody to send(), thus a deadlock is created. channels must be the multiplexer.
+    }
+
+    async fn run(&self) -> Result<()> {
+        let mut promises = {
+            let mut promises = self.promises.borrow_mut();
+            mem::replace(promises.as_mut(), Vec::new())
+        };
+        // let channels = mem::replace(&mut self.channels, RefCell::new(Vec::new()));
 
         promises.push(Box::pin(
             async move {
-                for (ch, val) in channels {
-                    my_sleep(1.0).await;
-                    ch.send(val).await.unwrap();
-                }
+                // Cannot borrow and iterate as the cell is shared
+                // within the listeners.
+                // loop {}
+
+                // for (ch, val) in channels {
+                //     my_sleep(1.0).await;
+                //     ch.send(val).await.unwrap();
+                // }
                 Ok(())
             }
             .fuse(),
@@ -83,49 +114,20 @@ impl Dispatcher {
 }
 
 async fn start() -> Result<()> {
-    let mut dispatcher = Dispatcher {
-        promises: Vec::new(),
-        channels: Vec::new(),
+    let dispatcher = Dispatcher {
+        promises: RefCell::new(Vec::new()),
+        channels: RefCell::new(Vec::new()),
     };
 
-    dispatcher.add(
-        Box::new(|rx| {
-            Box::pin(
-                async move {
-                    dbg!(rx.recv().await.unwrap());
-                    Ok(())
-                }
-                .fuse(),
-            )
-        }),
-        String::from("a"),
-    );
-
-    dispatcher.add(
-        Box::new(|rx| {
-            Box::pin(
-                async move {
-                    dbg!(rx.recv().await.unwrap());
-                    Ok(())
-                }
-                .fuse(),
-            )
-        }),
-        String::from("b"),
-    );
-
-    dispatcher.add(
-        Box::new(|rx| {
-            Box::pin(
-                async move {
-                    dbg!(rx.recv().await.unwrap());
-                    Ok(())
-                }
-                .fuse(),
-            )
-        }),
-        String::from("c"),
-    );
+    dispatcher.add(Box::new(|d: &Dispatcher| {
+        Box::pin(
+            async {
+                dbg!(d.listen(String::from("a")).await.unwrap());
+                Ok(())
+            }
+            .fuse(),
+        )
+    }));
 
     dispatcher.run().await
 }
