@@ -89,40 +89,8 @@ impl Dispatcher {
     }
 
     async fn run(&self) -> Result<()> {
-        let mut promises = mem::replace(self.inner.promises.borrow_mut().as_mut(), Vec::new());
-        // let channels = mem::replace(&mut self.channels, RefCell::new(Vec::new()));
-
-        promises.push(Box::pin(
-            async move {
-                my_sleep(0.5).await;
-                self.inner.fire("a", String::from("aaa"));
-                my_sleep(0.5).await;
-                self.inner.fire("b", 42);
-                Ok(())
-            }
-            .fuse(),
-        ));
-
+        let promises = mem::replace(self.inner.promises.borrow_mut().as_mut(), Vec::new());
         join_all(promises).await.into_iter().collect()
-
-        // plan
-        // pass the dispatcher to all add()ed functions right away
-        // in those functions await for some events from the dispatcher
-        // allow add()ing more function from within functions
-        // run all the futures returned from the add()ed function to completion
-        // remove completed futures from time to time
-
-        // how
-        // A Listener is the functions that Dispatcher runs passing itself and then runs the futures
-        // write an add() function for use in a Listener that returns a future that can be awaited within the Listener
-        // pass an immutable reference to Dispatcher to Listeners and store the listeners vec in a Cell?
-        // we prob don't even need the Listeners vec, we need the futures vec
-        // -> looks like a wrapper for a one-off channel to me
-        // -> plus an async runtime that supports dynamic task creation, fitting all in one
-        // non "selected" await is not gonna work.
-
-        // todo
-        // [x] add() a few Listeners and then in the same function try to fire their awaits
     }
 }
 
@@ -157,6 +125,19 @@ async fn start() -> Result<()> {
             async move {
                 let v: i32 = d.listen(String::from("b")).await;
                 dbg!(v);
+                Ok(())
+            }
+            .fuse(),
+        )
+    }));
+
+    dispatcher.add(Box::new(|d| {
+        Box::pin(
+            async move {
+                my_sleep(0.5).await;
+                d.fire("a", String::from("aaa"));
+                my_sleep(0.5).await;
+                d.fire("b", 42);
                 Ok(())
             }
             .fuse(),
