@@ -171,19 +171,24 @@ async fn start() -> Result<()> {
         })
     });
 
-    // runner.push(Box::pin(async {
-    //     dbg!(1);
-    // }));
-    // {
-    //     let all = runner.futures();
-    //     runner.push(Box::pin(async move {
-    //         dbg!(2);
+    runner.push(Box::pin(async {
+        dbg!(1);
+    }));
 
-    //         all.borrow_mut().push(Some(Box::pin(async {
-    //             dbg!(5);
-    //         })));
-    //     }));
-    // }
+    {
+        let all = runner.futures();
+        runner.push(Box::pin(async move {
+            dbg!(2);
+
+            all.borrow_mut().push(Some(Box::pin(async {
+                dbg!(4);
+            })));
+        }));
+    }
+
+    runner.push(Box::pin(async {
+        dbg!(3);
+    }));
 
     runner.await;
 
