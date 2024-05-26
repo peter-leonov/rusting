@@ -71,37 +71,58 @@ impl Message<i32> for i32 {
 
 type Task = Pin<Box<dyn Future<Output = ()>>>;
 
-struct MyFuture {
-    futures: Rc<RefCell<Vec<Option<Task>>>>,
+struct Tasks(RefCell<Vec<Option<Task>>>);
+
+impl Tasks {
+    fn new() -> Self {
+        Self(RefCell::new(Vec::new()))
+    }
+
+    fn spawn(&self, task: Task) {
+        self.0.borrow_mut().push(Some(task))
+    }
+
+    fn len(&self) -> usize {
+        self.0.borrow().len()
+    }
+
+    fn take(&self, n: usize) -> Option<Task> {
+        self.0.borrow_mut()[n].take()
+    }
+
+    fn put(&self, n: usize, task: Task) -> Option<Task> {
+        self.0.borrow_mut()[n].replace(task)
+    }
 }
 
-impl MyFuture {
+struct Runner {
+    tasks: Rc<Tasks>,
+}
+
+impl Runner {
     fn new() -> Self {
         Self {
-            futures: Rc::new(RefCell::new(Vec::new())),
+            tasks: Rc::new(Tasks::new()),
         }
     }
 
-    fn push(&mut self, task: Task) {
-        self.futures.borrow_mut().push(Some(task))
-    }
-
-    fn futures(&self) -> Rc<RefCell<Vec<Option<Task>>>> {
-        self.futures.clone()
+    fn tasks(&self) -> Rc<Tasks> {
+        self.tasks.clone()
     }
 }
 
 use core::task::{Context, Poll};
 
-impl Future for MyFuture {
+impl Future for Runner {
     // type Output = F::Output;
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let len = self.futures.borrow().len();
+        // TODO: either purge or come up with a better sructure than ever growing Vec
+        let len = self.tasks.len();
         let mut pending = false;
         for i in 0..len {
-            let o = self.futures.borrow_mut()[i].take();
+            let o = self.tasks.take(i);
             if let Some(mut f) = o {
                 match f.as_mut().poll(cx) {
                     Poll::Ready(_) => {
@@ -110,16 +131,16 @@ impl Future for MyFuture {
                     Poll::Pending => {
                         pending = true;
                         // o must be None here
-                        self.futures.borrow_mut()[i].replace(f);
+                        self.tasks.put(i, f);
                     }
                 }
             }
         }
 
-        let new_len = self.futures.borrow().len();
+        let new_len = self.tasks.len();
         assert!(new_len >= len);
         if new_len > len {
-            // dbg!("added");
+            // dbg!("grew");
             self.poll(cx)
         } else {
             if pending {
@@ -134,9 +155,10 @@ impl Future for MyFuture {
 async fn start() -> Result<()> {
     let d = Rc::new(Dispatcher::new());
 
-    let mut runner = MyFuture::new();
+    let runner = Runner::new();
+    let t = runner.tasks();
 
-    runner.push({
+    t.spawn({
         let d = d.clone();
         Box::pin(async move {
             let v: String = d.listen(String::from("a")).await;
@@ -144,7 +166,7 @@ async fn start() -> Result<()> {
         })
     });
 
-    runner.push({
+    t.spawn({
         let d = d.clone();
         Box::pin(async move {
             let v: String = d.listen(String::from("b")).await;
@@ -152,7 +174,7 @@ async fn start() -> Result<()> {
         })
     });
 
-    runner.push({
+    t.spawn({
         let d = d.clone();
         Box::pin(async move {
             d.fire("a", String::from("a"));
@@ -161,7 +183,7 @@ async fn start() -> Result<()> {
         })
     });
 
-    runner.push({
+    t.spawn({
         let d = d.clone();
         Box::pin(async move {
             let p = d.listen(String::from("c"));
@@ -171,22 +193,22 @@ async fn start() -> Result<()> {
         })
     });
 
-    runner.push(Box::pin(async {
+    t.spawn(Box::pin(async {
         dbg!(1);
     }));
 
-    {
-        let all = runner.futures();
-        runner.push(Box::pin(async move {
+    t.spawn({
+        let t = t.clone();
+        Box::pin(async move {
             dbg!(2);
 
-            all.borrow_mut().push(Some(Box::pin(async {
+            t.spawn(Box::pin(async {
                 dbg!(4);
-            })));
-        }));
-    }
+            }));
+        })
+    });
 
-    runner.push(Box::pin(async {
+    t.spawn(Box::pin(async {
         dbg!(3);
     }));
 
