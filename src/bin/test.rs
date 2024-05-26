@@ -1,7 +1,6 @@
 use anyhow::Result;
 use futures::channel::oneshot;
 use futures::executor::block_on;
-use futures::future::join_all;
 use futures::Future;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -21,8 +20,6 @@ async fn my_sleep(seconds: f32) {
 
     rx.await.unwrap();
 }
-
-type Promise = Pin<Box<dyn Future<Output = ()>>>;
 
 trait Message<T> {
     fn listeners(inner: &Dispatcher) -> &RefCell<Listeners<T>>;
