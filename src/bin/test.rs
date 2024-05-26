@@ -69,6 +69,62 @@ impl Message<i32> for i32 {
     }
 }
 
+type Task = Pin<Box<dyn Future<Output = ()>>>;
+
+struct MyFuture {
+    futures: Vec<Option<Task>>,
+}
+
+impl MyFuture {
+    fn new() -> Self {
+        Self {
+            futures: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, task: Task) {
+        self.futures.push(Some(task))
+    }
+}
+
+use core::task::{Context, Poll};
+
+impl Future for MyFuture {
+    // type Output = F::Output;
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.futures.len() < 5 {
+            self.push(Box::pin(async {
+                dbg!(5);
+            }));
+        }
+
+        let mut pending = false;
+        for o in &mut self.futures {
+            if let Some(mut f) = o.take() {
+                match f.as_mut().poll(cx) {
+                    Poll::Ready(_) => {
+                        dbg!("it's ready");
+                    }
+                    Poll::Pending => {
+                        pending = true;
+                        // o must be None here
+                        o.replace(f);
+                    }
+                }
+            }
+        }
+
+        if pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+        // self.f.as_mut().poll(cx)
+    }
+}
+
 async fn start() -> Result<()> {
     let d = Rc::new(Dispatcher::new());
 
@@ -105,6 +161,15 @@ async fn start() -> Result<()> {
             })
         },
     ];
+
+    let mut all = MyFuture::new();
+    all.push(Box::pin(async {
+        dbg!(1);
+    }));
+    all.push(Box::pin(async {
+        dbg!(2);
+    }));
+    all.await;
 
     join_all(futures).await;
 
