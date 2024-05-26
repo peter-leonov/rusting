@@ -72,18 +72,22 @@ impl Message<i32> for i32 {
 type Task = Pin<Box<dyn Future<Output = ()>>>;
 
 struct MyFuture {
-    futures: Vec<Option<Task>>,
+    futures: Rc<RefCell<Vec<Option<Task>>>>,
 }
 
 impl MyFuture {
     fn new() -> Self {
         Self {
-            futures: Vec::new(),
+            futures: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
     fn push(&mut self, task: Task) {
-        self.futures.push(Some(task))
+        self.futures.borrow_mut().push(Some(task))
+    }
+
+    fn futures(&self) -> Rc<RefCell<Vec<Option<Task>>>> {
+        self.futures.clone()
     }
 }
 
@@ -93,16 +97,12 @@ impl Future for MyFuture {
     // type Output = F::Output;
     type Output = ();
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.futures.len() < 5 {
-            self.push(Box::pin(async {
-                dbg!(5);
-            }));
-        }
-
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let len = self.futures.borrow().len();
         let mut pending = false;
-        for o in &mut self.futures {
-            if let Some(mut f) = o.take() {
+        for i in 0..len {
+            let o = self.futures.borrow_mut()[i].take();
+            if let Some(mut f) = o {
                 match f.as_mut().poll(cx) {
                     Poll::Ready(_) => {
                         dbg!("it's ready");
@@ -110,18 +110,24 @@ impl Future for MyFuture {
                     Poll::Pending => {
                         pending = true;
                         // o must be None here
-                        o.replace(f);
+                        self.futures.borrow_mut()[i].replace(f);
                     }
                 }
             }
         }
 
-        if pending {
-            Poll::Pending
+        let new_len = self.futures.borrow().len();
+        assert!(new_len >= len);
+        if new_len > len {
+            dbg!("added");
+            self.poll(cx)
         } else {
-            Poll::Ready(())
+            if pending {
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
         }
-        // self.f.as_mut().poll(cx)
     }
 }
 
@@ -162,14 +168,22 @@ async fn start() -> Result<()> {
         },
     ];
 
-    let mut all = MyFuture::new();
-    all.push(Box::pin(async {
+    let mut runner = MyFuture::new();
+    runner.push(Box::pin(async {
         dbg!(1);
     }));
-    all.push(Box::pin(async {
-        dbg!(2);
-    }));
-    all.await;
+    {
+        let all = runner.futures();
+        runner.push(Box::pin(async move {
+            dbg!(2);
+
+            all.borrow_mut().push(Some(Box::pin(async {
+                dbg!(5);
+            })));
+        }));
+    }
+
+    runner.await;
 
     join_all(futures).await;
 
