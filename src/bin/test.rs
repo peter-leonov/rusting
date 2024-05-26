@@ -105,7 +105,7 @@ impl Future for MyFuture {
             if let Some(mut f) = o {
                 match f.as_mut().poll(cx) {
                     Poll::Ready(_) => {
-                        dbg!("it's ready");
+                        // dbg!("it's ready");
                     }
                     Poll::Pending => {
                         pending = true;
@@ -119,7 +119,7 @@ impl Future for MyFuture {
         let new_len = self.futures.borrow().len();
         assert!(new_len >= len);
         if new_len > len {
-            dbg!("added");
+            // dbg!("added");
             self.poll(cx)
         } else {
             if pending {
@@ -134,58 +134,58 @@ impl Future for MyFuture {
 async fn start() -> Result<()> {
     let d = Rc::new(Dispatcher::new());
 
-    let futures: Vec<Promise> = vec![
-        {
-            let d = d.clone();
-            Box::pin(async move {
-                let v: String = d.listen(String::from("a")).await;
-                dbg!(v);
-            })
-        },
-        {
-            let d = d.clone();
-            Box::pin(async move {
-                let v: String = d.listen(String::from("b")).await;
-                dbg!(v);
-            })
-        },
-        {
-            let d = d.clone();
-            Box::pin(async move {
-                d.fire("a", String::from("a"));
-                my_sleep(0.5).await;
-                d.fire("b", String::from("b"));
-            })
-        },
-        {
-            let d = d.clone();
-            Box::pin(async move {
-                let p = d.listen(String::from("c"));
-                d.fire("c", 42);
-                let v: i32 = p.await;
-                dbg!(v);
-            })
-        },
-    ];
-
     let mut runner = MyFuture::new();
-    runner.push(Box::pin(async {
-        dbg!(1);
-    }));
-    {
-        let all = runner.futures();
-        runner.push(Box::pin(async move {
-            dbg!(2);
 
-            all.borrow_mut().push(Some(Box::pin(async {
-                dbg!(5);
-            })));
-        }));
-    }
+    runner.push({
+        let d = d.clone();
+        Box::pin(async move {
+            let v: String = d.listen(String::from("a")).await;
+            dbg!(v);
+        })
+    });
+
+    runner.push({
+        let d = d.clone();
+        Box::pin(async move {
+            let v: String = d.listen(String::from("b")).await;
+            dbg!(v);
+        })
+    });
+
+    runner.push({
+        let d = d.clone();
+        Box::pin(async move {
+            d.fire("a", String::from("a"));
+            my_sleep(0.5).await;
+            d.fire("b", String::from("b"));
+        })
+    });
+
+    runner.push({
+        let d = d.clone();
+        Box::pin(async move {
+            let p = d.listen(String::from("c"));
+            d.fire("c", 42);
+            let v: i32 = p.await;
+            dbg!(v);
+        })
+    });
+
+    // runner.push(Box::pin(async {
+    //     dbg!(1);
+    // }));
+    // {
+    //     let all = runner.futures();
+    //     runner.push(Box::pin(async move {
+    //         dbg!(2);
+
+    //         all.borrow_mut().push(Some(Box::pin(async {
+    //             dbg!(5);
+    //         })));
+    //     }));
+    // }
 
     runner.await;
-
-    join_all(futures).await;
 
     Ok(())
 }
