@@ -68,27 +68,33 @@ impl Message<i32> for i32 {
 
 type Task = Pin<Box<dyn Future<Output = ()>>>;
 
-struct Tasks(RefCell<Vec<Option<Task>>>);
+struct Tasks {
+    old: RefCell<Vec<Task>>,
+    new: RefCell<Vec<Task>>,
+}
 
 impl Tasks {
     fn new() -> Self {
-        Self(RefCell::new(Vec::new()))
+        Self {
+            old: RefCell::new(Vec::new()),
+            new: RefCell::new(Vec::new()),
+        }
     }
 
     fn spawn(&self, task: Task) {
-        self.0.borrow_mut().push(Some(task))
+        self.new.borrow_mut().push(task)
     }
 
-    fn len(&self) -> usize {
-        self.0.borrow().len()
+    fn take_old(&self) -> Vec<Task> {
+        self.old.take()
     }
 
-    fn take(&self, n: usize) -> Option<Task> {
-        self.0.borrow_mut()[n].take()
+    fn take_new(&self) -> Vec<Task> {
+        self.new.take()
     }
 
-    fn put(&self, n: usize, task: Task) -> Option<Task> {
-        self.0.borrow_mut()[n].replace(task)
+    fn append_to_old(&self, mut tasks: Vec<Task>) {
+        self.old.borrow_mut().append(&mut tasks)
     }
 }
 
@@ -115,36 +121,34 @@ impl Future for Runner {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // TODO: either purge or come up with a better sructure than ever growing Vec
-        let len = self.tasks.len();
-        let mut pending = false;
-        for i in 0..len {
-            let o = self.tasks.take(i);
-            if let Some(mut f) = o {
-                match f.as_mut().poll(cx) {
-                    Poll::Ready(_) => {
-                        // dbg!("it's ready");
-                    }
-                    Poll::Pending => {
-                        pending = true;
-                        // o must be None here
-                        self.tasks.put(i, f);
-                    }
+        let old = self.tasks.take_old();
+        let mut pending = Vec::with_capacity(old.len());
+        for mut task in old {
+            match task.as_mut().poll(cx) {
+                Poll::Ready(_) => {
+                    // just drop it
+                }
+                Poll::Pending => {
+                    pending.push(task);
                 }
             }
         }
 
-        let new_len = self.tasks.len();
-        assert!(new_len >= len);
-        if new_len > len {
-            // dbg!("grew");
-            self.poll(cx)
-        } else {
-            if pending {
+        let has_pending = !pending.is_empty();
+
+        // self.tasks.old is empty at this moment
+        self.tasks.append_to_old(pending);
+
+        let new = self.tasks.take_new();
+        if new.is_empty() {
+            if has_pending {
                 Poll::Pending
             } else {
                 Poll::Ready(())
             }
+        } else {
+            self.tasks.append_to_old(new);
+            self.poll(cx)
         }
     }
 }
