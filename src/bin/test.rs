@@ -85,16 +85,12 @@ impl Tasks {
         self.new.borrow_mut().push(task)
     }
 
-    fn take_old(&self) -> Vec<Task> {
-        self.old.take()
+    fn append_to_old(&self, mut tasks: Vec<Task>) {
+        self.old.borrow_mut().append(&mut tasks)
     }
 
     fn take_new(&self) -> Vec<Task> {
         self.new.take()
-    }
-
-    fn append_to_old(&self, mut tasks: Vec<Task>) {
-        self.old.borrow_mut().append(&mut tasks)
     }
 }
 
@@ -121,23 +117,15 @@ impl Future for Runner {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let old = self.tasks.take_old();
-        let mut pending = Vec::with_capacity(old.len());
-        for mut task in old {
-            match task.as_mut().poll(cx) {
-                Poll::Ready(_) => {
-                    // just drop it
-                }
-                Poll::Pending => {
-                    pending.push(task);
-                }
-            }
-        }
+        self.tasks
+            .old
+            .borrow_mut()
+            .retain_mut(|task| match task.as_mut().poll(cx) {
+                Poll::Ready(_) => false,
+                Poll::Pending => true,
+            });
 
-        let has_pending = !pending.is_empty();
-
-        // self.tasks.old is empty at this moment
-        self.tasks.append_to_old(pending);
+        let has_pending = !self.tasks.old.borrow().is_empty();
 
         let new = self.tasks.take_new();
         if new.is_empty() {
