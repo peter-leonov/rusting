@@ -1,3 +1,5 @@
+// Not using tokio to understand futures and async/await in Rust better.
+// Not writing tests to not make it more bureaucratic than necessary.
 use anyhow::Result;
 use futures::channel::oneshot;
 use futures::executor::block_on;
@@ -117,14 +119,16 @@ impl Future for Runner {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let old_empty = poll_vec(self.tasks.old.borrow_mut().as_mut(), cx);
+        let mut old_empty = poll_vec(self.tasks.old.borrow_mut().as_mut(), cx);
 
-        {
+        loop {
             let mut new = self.tasks.new.take();
-            if !new.is_empty() {
-                self.tasks.old.borrow_mut().append(&mut new);
-                return self.poll(cx);
+            let new_empty = poll_vec(&mut new, cx);
+            if new_empty {
+                break;
             }
+            self.tasks.old.borrow_mut().append(&mut new);
+            old_empty = false;
         }
 
         if old_empty {
@@ -164,7 +168,7 @@ async fn start() -> Result<()> {
         Box::pin(async move {
             d.fire("a", String::from("value for a"));
             dbg!("before sleep");
-            my_sleep(1.0).await;
+            my_sleep(0.1).await;
             dbg!("after sleep");
             d.fire("b", String::from("value for b"));
             dbg!("async 3");
