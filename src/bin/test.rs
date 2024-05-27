@@ -83,8 +83,15 @@ impl Tasks {
         }
     }
 
-    fn spawn(&self, task: Task) {
-        self.new.borrow_mut().push(task)
+    // fn spawn_task(&self, task: Task) {
+    //     self.new.borrow_mut().push(task)
+    // }
+
+    // for why and what 'static is see:
+    // https://github.com/pretzelhammer/rust-blog/blob/master/posts/common-rust-lifetime-misconceptions.md#2-if-t-static-then-t-must-be-valid-for-the-entire-program
+    fn spawn<F: Future<Output = ()> + 'static>(&self, fut: F) {
+        // Seems like it's safe to pass a nonstarted future around.
+        self.new.borrow_mut().push(Box::pin(fut))
     }
 }
 
@@ -147,68 +154,68 @@ async fn start() -> Result<()> {
 
     t.spawn({
         let d = d.clone();
-        Box::pin(async move {
+        async move {
             dbg!("async 1 {");
             let v: String = d.listen(String::from("a")).await;
             assert!(v == String::from("value for a"));
             dbg!("async 1 }");
-        })
+        }
     });
 
     t.spawn({
         let d = d.clone();
-        Box::pin(async move {
+        async move {
             dbg!("async 2 {");
             let v: String = d.listen(String::from("b")).await;
             assert!(v == String::from("value for b"));
             dbg!("async 2 }");
-        })
+        }
     });
 
     t.spawn({
         let d = d.clone();
-        Box::pin(async move {
+        async move {
             dbg!("async 3 {");
             d.fire("a", String::from("value for a"));
             my_sleep(0.1).await;
             d.fire("b", String::from("value for b"));
             dbg!("async 3 }");
-        })
+        }
     });
 
     t.spawn({
         let d = d.clone();
-        Box::pin(async move {
+        async move {
             dbg!("async 4 {");
             let p = d.listen(String::from("c"));
             d.fire("c", 42);
             let v: i32 = p.await;
             assert!(v == 42);
             dbg!("async 4 }");
-        })
+        }
     });
 
-    t.spawn(Box::pin(async {
+    t.spawn(async {
         dbg!("async 5 {");
         dbg!("async 5 }");
-    }));
+    });
 
     t.spawn({
         let t = t.clone();
-        Box::pin(async move {
+        async move {
             dbg!("async 6 {");
-            t.spawn(Box::pin(async {
+            t.spawn(async {
                 dbg!("async 7 {");
                 dbg!("async 7 }");
-            }));
+            });
             dbg!("async 6 }");
-        })
+        }
     });
 
-    t.spawn(Box::pin(async {
+    t.spawn(async {
         dbg!("async 8 {");
         dbg!("async 8 }");
-    }));
+    });
 
     runner.await;
 
