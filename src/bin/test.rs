@@ -84,14 +84,6 @@ impl Tasks {
     fn spawn(&self, task: Task) {
         self.new.borrow_mut().push(task)
     }
-
-    fn append_to_old(&self, mut tasks: Vec<Task>) {
-        self.old.borrow_mut().append(&mut tasks)
-    }
-
-    fn take_new(&self) -> Vec<Task> {
-        self.new.take()
-    }
 }
 
 struct Runner {
@@ -117,17 +109,18 @@ impl Future for Runner {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.tasks
-            .old
-            .borrow_mut()
-            .retain_mut(|task| match task.as_mut().poll(cx) {
+        let has_pending = {
+            let mut old = self.tasks.old.borrow_mut();
+
+            old.retain_mut(|task| match task.as_mut().poll(cx) {
                 Poll::Ready(_) => false,
                 Poll::Pending => true,
             });
 
-        let has_pending = !self.tasks.old.borrow().is_empty();
+            old.is_empty()
+        };
 
-        let new = self.tasks.take_new();
+        let mut new = self.tasks.new.take();
         if new.is_empty() {
             if has_pending {
                 Poll::Pending
@@ -135,7 +128,7 @@ impl Future for Runner {
                 Poll::Ready(())
             }
         } else {
-            self.tasks.append_to_old(new);
+            self.tasks.old.borrow_mut().append(&mut new);
             self.poll(cx)
         }
     }
