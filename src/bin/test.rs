@@ -148,65 +148,66 @@ async fn start() -> Result<()> {
     t.spawn({
         let d = d.clone();
         Box::pin(async move {
+            dbg!("async 1 {");
             let v: String = d.listen(String::from("a")).await;
-            dbg!(v);
-            dbg!("async 1");
+            assert!(v == String::from("value for a"));
+            dbg!("async 1 }");
         })
     });
 
     t.spawn({
         let d = d.clone();
         Box::pin(async move {
+            dbg!("async 2 {");
             let v: String = d.listen(String::from("b")).await;
-            dbg!(v);
-            dbg!("async 2");
+            assert!(v == String::from("value for b"));
+            dbg!("async 2 }");
         })
     });
 
     t.spawn({
         let d = d.clone();
         Box::pin(async move {
+            dbg!("async 3 {");
             d.fire("a", String::from("value for a"));
-            dbg!("before sleep");
             my_sleep(0.1).await;
-            dbg!("after sleep");
             d.fire("b", String::from("value for b"));
-            dbg!("async 3");
+            dbg!("async 3 }");
         })
     });
 
     t.spawn({
         let d = d.clone();
         Box::pin(async move {
+            dbg!("async 4 {");
             let p = d.listen(String::from("c"));
-            d.fire("c", String::from("value for c"));
-            let v: String = p.await;
-            dbg!(v);
-            dbg!("async 4");
+            d.fire("c", 42);
+            let v: i32 = p.await;
+            assert!(v == 42);
+            dbg!("async 4 }");
         })
     });
 
     t.spawn(Box::pin(async {
-        dbg!("simple one");
-        dbg!("async 5");
+        dbg!("async 5 {");
+        dbg!("async 5 }");
     }));
 
     t.spawn({
         let t = t.clone();
         Box::pin(async move {
-            dbg!("adding a dynamic task");
-
+            dbg!("async 6 {");
             t.spawn(Box::pin(async {
-                dbg!("in a dynamic task");
-                dbg!("async 7");
+                dbg!("async 7 {");
+                dbg!("async 7 }");
             }));
-            dbg!("async 6");
+            dbg!("async 6 }");
         })
     });
 
     t.spawn(Box::pin(async {
-        dbg!("simple two");
-        dbg!("async 8");
+        dbg!("async 8 {");
+        dbg!("async 8 }");
     }));
 
     runner.await;
