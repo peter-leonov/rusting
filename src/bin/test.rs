@@ -1,9 +1,9 @@
 // Not using tokio to understand futures and async/await in Rust better.
 // Not writing tests to not make it more bureaucratic than necessary.
-use anyhow::Result;
-use futures::channel::oneshot;
+use anyhow::{anyhow, Result};
 use futures::executor::block_on;
 use futures::Future;
+use futures::{channel::oneshot, TryFutureExt};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -42,17 +42,21 @@ impl Dispatcher {
         }
     }
 
-    fn listen<T: Message<T> + Debug>(&self, val: String) -> impl Future<Output = T> {
+    fn listen<T: Message<T> + Debug>(&self, val: String) -> impl Future<Output = Result<T>> {
         let (tx, rx) = oneshot::channel::<T>();
         T::listeners(self).borrow_mut().insert(val, tx);
-        async { rx.await.unwrap() }
+        rx.or_else(|_| async { Err(anyhow!("error receiving a message")) })
     }
 
-    fn fire<T: Message<T> + Debug>(&self, name: &str, val: T) {
-        T::listeners(self)
-            .borrow_mut()
-            .remove(name)
-            .and_then(|ch| Some(ch.send(val).unwrap()));
+    fn fire<T: Message<T> + Debug>(&self, name: &str, val: T) -> Result<bool> {
+        if let Some(tx) = T::listeners(self).borrow_mut().remove(name) {
+            if let Err(val) = tx.send(val) {
+                return Err(anyhow!("error firing a message {:?}", val));
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
@@ -68,7 +72,7 @@ impl Message<i32> for i32 {
     }
 }
 
-type Task = Pin<Box<dyn Future<Output = ()>>>;
+type Task = Pin<Box<dyn Future<Output = Result<()>>>>;
 
 struct Tasks {
     old: RefCell<Vec<Task>>,
@@ -89,7 +93,7 @@ impl Tasks {
 
     // for why and what 'static is see:
     // https://github.com/pretzelhammer/rust-blog/blob/master/posts/common-rust-lifetime-misconceptions.md#2-if-t-static-then-t-must-be-valid-for-the-entire-program
-    fn spawn<F: Future<Output = ()> + 'static>(&self, fut: F) {
+    fn spawn<F: Future<Output = Result<()>> + 'static>(&self, fut: F) {
         // Seems like it's safe to pass a nonstarted future around.
         self.new.borrow_mut().push(Box::pin(fut))
     }
@@ -156,9 +160,10 @@ async fn start() -> Result<()> {
         let d = d.clone();
         async move {
             dbg!("async 1 {");
-            let v: String = d.listen(String::from("a")).await;
+            let v: String = d.listen(String::from("a")).await?;
             assert!(v == String::from("value for a"));
             dbg!("async 1 }");
+            Ok(())
         }
     });
 
@@ -166,9 +171,10 @@ async fn start() -> Result<()> {
         let d = d.clone();
         async move {
             dbg!("async 2 {");
-            let v: String = d.listen(String::from("b")).await;
+            let v: String = d.listen(String::from("b")).await?;
             assert!(v == String::from("value for b"));
             dbg!("async 2 }");
+            Ok(())
         }
     });
 
@@ -176,10 +182,11 @@ async fn start() -> Result<()> {
         let d = d.clone();
         async move {
             dbg!("async 3 {");
-            d.fire("a", String::from("value for a"));
+            d.fire("a", String::from("value for a"))?;
             my_sleep(0.1).await;
-            d.fire("b", String::from("value for b"));
+            d.fire("b", String::from("value for b"))?;
             dbg!("async 3 }");
+            Ok(())
         }
     });
 
@@ -188,16 +195,18 @@ async fn start() -> Result<()> {
         async move {
             dbg!("async 4 {");
             let p = d.listen(String::from("c"));
-            d.fire("c", 42);
-            let v: i32 = p.await;
+            d.fire("c", 42)?;
+            let v: i32 = p.await?;
             assert!(v == 42);
             dbg!("async 4 }");
+            Ok(())
         }
     });
 
     t.spawn(async {
         dbg!("async 5 {");
         dbg!("async 5 }");
+        Ok(())
     });
 
     t.spawn({
@@ -207,14 +216,17 @@ async fn start() -> Result<()> {
             t.spawn(async {
                 dbg!("async 7 {");
                 dbg!("async 7 }");
+                Ok(())
             });
             dbg!("async 6 }");
+            Ok(())
         }
     });
 
     t.spawn(async {
         dbg!("async 8 {");
         dbg!("async 8 }");
+        Ok(())
     });
 
     runner.await;
