@@ -104,32 +104,33 @@ impl Runner {
 
 use core::task::{Context, Poll};
 
+fn poll_vec(tasks: &mut Vec<Task>, cx: &mut Context<'_>) -> bool {
+    tasks.retain_mut(|task| match task.as_mut().poll(cx) {
+        Poll::Ready(_) => false,
+        Poll::Pending => true,
+    });
+    tasks.is_empty()
+}
+
 impl Future for Runner {
     // type Output = F::Output;
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let has_pending = {
-            let mut old = self.tasks.old.borrow_mut();
+        let old_empty = poll_vec(self.tasks.old.borrow_mut().as_mut(), cx);
 
-            old.retain_mut(|task| match task.as_mut().poll(cx) {
-                Poll::Ready(_) => false,
-                Poll::Pending => true,
-            });
-
-            old.is_empty()
-        };
-
-        let mut new = self.tasks.new.take();
-        if new.is_empty() {
-            if has_pending {
-                Poll::Pending
-            } else {
-                Poll::Ready(())
+        {
+            let mut new = self.tasks.new.take();
+            if !new.is_empty() {
+                self.tasks.old.borrow_mut().append(&mut new);
+                return self.poll(cx);
             }
+        }
+
+        if old_empty {
+            Poll::Ready(())
         } else {
-            self.tasks.old.borrow_mut().append(&mut new);
-            self.poll(cx)
+            Poll::Pending
         }
     }
 }
@@ -145,6 +146,7 @@ async fn start() -> Result<()> {
         Box::pin(async move {
             let v: String = d.listen(String::from("a")).await;
             dbg!(v);
+            dbg!("async 1");
         })
     });
 
@@ -153,15 +155,19 @@ async fn start() -> Result<()> {
         Box::pin(async move {
             let v: String = d.listen(String::from("b")).await;
             dbg!(v);
+            dbg!("async 2");
         })
     });
 
     t.spawn({
         let d = d.clone();
         Box::pin(async move {
-            d.fire("a", String::from("a"));
-            my_sleep(0.5).await;
-            d.fire("b", String::from("b"));
+            d.fire("a", String::from("value for a"));
+            dbg!("before sleep");
+            my_sleep(1.0).await;
+            dbg!("after sleep");
+            d.fire("b", String::from("value for b"));
+            dbg!("async 3");
         })
     });
 
@@ -169,29 +175,34 @@ async fn start() -> Result<()> {
         let d = d.clone();
         Box::pin(async move {
             let p = d.listen(String::from("c"));
-            d.fire("c", 42);
-            let v: i32 = p.await;
+            d.fire("c", String::from("value for c"));
+            let v: String = p.await;
             dbg!(v);
+            dbg!("async 4");
         })
     });
 
     t.spawn(Box::pin(async {
-        dbg!(1);
+        dbg!("simple one");
+        dbg!("async 5");
     }));
 
     t.spawn({
         let t = t.clone();
         Box::pin(async move {
-            dbg!(2);
+            dbg!("adding a dynamic task");
 
             t.spawn(Box::pin(async {
-                dbg!(4);
+                dbg!("in a dynamic task");
+                dbg!("async 7");
             }));
+            dbg!("async 6");
         })
     });
 
     t.spawn(Box::pin(async {
-        dbg!(3);
+        dbg!("simple two");
+        dbg!("async 8");
     }));
 
     runner.await;
