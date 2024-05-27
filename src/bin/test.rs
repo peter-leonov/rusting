@@ -1,6 +1,6 @@
 // Not using tokio to understand futures and async/await in Rust better.
 // Not writing tests to not make it more bureaucratic than necessary.
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use futures::executor::block_on;
 use futures::Future;
 use futures::{channel::oneshot, TryFutureExt};
@@ -119,7 +119,12 @@ use core::task::{Context, Poll};
 
 fn poll_vec(tasks: &mut Vec<Task>, cx: &mut Context<'_>) -> bool {
     tasks.retain_mut(|task| match task.as_mut().poll(cx) {
-        Poll::Ready(_) => false,
+        Poll::Ready(res) => {
+            if let Err(err) = res {
+                eprintln!("unhandled error result: {:?}", err);
+            }
+            false
+        }
         Poll::Pending => true,
     });
     tasks.is_empty()
@@ -225,8 +230,7 @@ async fn start() -> Result<()> {
 
     t.spawn(async {
         dbg!("async 8 {");
-        dbg!("async 8 }");
-        Ok(())
+        bail!("error in a task");
     });
 
     runner.await;
