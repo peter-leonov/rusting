@@ -12,6 +12,13 @@ use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
+/**
+    A super inefficient async sleep.
+
+    Normal async sleep would use some kernel event based timer
+    with an efficient data structure for listeners like a priority queue.
+    Don't use this function in your code.
+*/
 async fn my_sleep(seconds: f32) {
     let (tx, rx) = oneshot::channel::<()>();
 
@@ -87,10 +94,6 @@ impl Tasks {
         }
     }
 
-    // fn spawn_task(&self, task: Task) {
-    //     self.new.borrow_mut().push(task)
-    // }
-
     // for why and what 'static is see:
     // https://github.com/pretzelhammer/rust-blog/blob/master/posts/common-rust-lifetime-misconceptions.md#2-if-t-static-then-t-must-be-valid-for-the-entire-program
     fn spawn<F: Future<Output = Result<()>> + 'static>(&self, fut: F) {
@@ -131,7 +134,6 @@ fn poll_vec(tasks: &mut Vec<Task>, cx: &mut Context<'_>) -> bool {
 }
 
 impl Future for Runner {
-    // type Output = F::Output;
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
