@@ -1,31 +1,18 @@
 use core::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::task;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use std::{ptr, task};
 
-// copypasta from Waker::noop()
-const VTABLE: task::RawWakerVTable = task::RawWakerVTable::new(
-    // Cloning just returns a new no-op raw waker
-    |_| {
-        dbg!("cloning my waker");
-        RAW
-    },
-    // `wake` does nothing
-    |_| {
+struct MyWaker;
+
+impl task::Wake for MyWaker {
+    fn wake(self: Arc<Self>) {
         dbg!("waking my waker");
-    },
-    // `wake_by_ref` does nothing
-    |_| {
-        dbg!("waking by ref my waker");
-    },
-    // Dropping does nothing as we don't allocate anything
-    |_| {
-        dbg!("dropping my waker");
-    },
-);
-
-const RAW: task::RawWaker = task::RawWaker::new(ptr::null(), &VTABLE);
+        // self.0.unpark();
+    }
+}
 
 struct LazyTimer {
     start: Instant,
@@ -55,19 +42,15 @@ impl Future for LazyTimer {
 
 // plan:
 // implement a Promise that when `.resolve()`ed wakes the task up and return the resolved value
+// when resolved withing the same thread Promise has to indicate the the executor to run the poll() again
 
 async fn start() -> i32 {
-    LazyTimer::new(Duration::from_secs_f32(1.0)).await;
+    LazyTimer::new(Duration::from_secs_f32(0.5)).await;
     555
 }
 
 fn main() {
-    // let waker = Waker::from(&thought);
-    // let cx = Context::from_waker(&waker);
-
-    // TODO: try LocalWaker when it's out of nightly
-    let waker = unsafe { task::Waker::from_raw(RAW) };
-
+    let waker = Arc::new(MyWaker).into();
     let mut cx = task::Context::from_waker(&waker);
 
     let fut = start();
