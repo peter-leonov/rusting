@@ -1,4 +1,5 @@
 use core::future::Future;
+use std::pin;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task;
@@ -54,8 +55,7 @@ fn main() {
     let mut cx = task::Context::from_waker(&waker);
 
     let fut = start();
-    // TODO: find a way to avoid heap allocation
-    let mut fut_pin = Box::pin(fut);
+    let mut fut_pin = pin::pin!(fut);
     loop {
         if let task::Poll::Ready(v) = fut_pin.as_mut().poll(&mut cx) {
             dbg!(v);
