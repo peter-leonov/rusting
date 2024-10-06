@@ -6,9 +6,17 @@ use std::task;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-struct NoopWaker;
+struct MyWaker {
+    flag: bool,
+}
 
-impl task::Wake for NoopWaker {
+impl MyWaker {
+    fn new() -> Self {
+        Self { flag: false }
+    }
+}
+
+impl task::Wake for MyWaker {
     fn wake(self: Arc<Self>) {
         dbg!("waking the waker does nothing");
         // self.0.unpark();
@@ -16,15 +24,13 @@ impl task::Wake for NoopWaker {
 }
 
 struct LazyTimer {
-    start: Instant,
-    sleep_for: Duration,
+    due: Instant,
 }
 
 impl LazyTimer {
     fn new(sleep_for: Duration) -> Self {
         Self {
-            start: Instant::now(),
-            sleep_for,
+            due: Instant::now() + sleep_for,
         }
     }
 }
@@ -33,7 +39,7 @@ impl Future for LazyTimer {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, _: &mut task::Context<'_>) -> task::Poll<Self::Output> {
-        if Instant::now().duration_since(self.start) > self.sleep_for {
+        if Instant::now() >= self.due {
             task::Poll::Ready(())
         } else {
             task::Poll::Pending
@@ -41,18 +47,24 @@ impl Future for LazyTimer {
     }
 }
 
-// the plan:
+// The plan.
+// Simple next steps:
+// * support multiple concurrent timers that efficiently use a queue
+// * first teach the runtime to sleep exactly right for a single timer
+
+// Multi-threading:
 // * avoid parking the thread and using the waker for as long a possible to have a good demonstration of how things really work
 // * implement a Promise that when `.resolve()`ed wakes the running thread up and returns the resolved value
 // * when resolved withing the same thread Promise has to indicate to the executor to run the poll() again (a microtask sort of thing)
 
-async fn start() -> i32 {
+async fn start() {
+    dbg!("start {");
     LazyTimer::new(Duration::from_secs_f32(0.5)).await;
-    555
+    dbg!("start }");
 }
 
 fn main() {
-    let waker = Arc::new(NoopWaker).into();
+    let waker = Arc::new(MyWaker::new()).into();
     let mut cx = task::Context::from_waker(&waker);
 
     let fut = start();
