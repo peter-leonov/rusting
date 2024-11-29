@@ -1,7 +1,7 @@
 use libc;
 use std;
 use std::ffi::{CStr, CString};
-use std::io::BufRead;
+use std::io::{Read, Write};
 use std::os::fd::FromRawFd;
 
 fn panic_with_last_os_error() -> ! {
@@ -64,18 +64,25 @@ unsafe fn stuff() {
     } else {
         dbg!(child_pid);
 
-        // let file = std::fs::File::from_raw_fd(control_fd);
-        // let lines = std::io::BufReader::new(file).lines();
-        // for line in lines {
-        //     dbg!(line.unwrap());
-        // }
+        std::thread::spawn(move || {
+            let mut stdout = std::io::stdout();
+            let mut file = std::fs::File::from_raw_fd(control_fd);
+            let mut buf = [0u8; 4096];
+            loop {
+                let nread = file.read(&mut buf).unwrap();
+                if nread == 0 {
+                    break; // never happens as read() above blocks
+                }
+                stdout.write(&buf[0..nread]).unwrap();
+            }
+        });
 
-        let mut buf = [0u8; 1024];
-        let nread = libc::read(control_fd, buf.as_mut_ptr() as *mut libc::c_void, 1024);
-        if nread < 0 {
-            panic_with_last_os_error();
-        }
-        libc::write(0, buf.as_mut_ptr() as *mut libc::c_void, nread as usize);
+        // let mut buf = [0u8; 1024];
+        // let nread = libc::read(control_fd, buf.as_mut_ptr() as *mut libc::c_void, 1024);
+        // if nread < 0 {
+        //     panic_with_last_os_error();
+        // }
+        // libc::write(0, buf.as_mut_ptr() as *mut libc::c_void, nread as usize);
 
         println!("Press any key…");
         std::io::stdin().read_line(&mut String::new()).unwrap();
