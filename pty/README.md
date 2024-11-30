@@ -7,4 +7,14 @@ Heavily inspired by Ivan Velichko's [post](https://iximiuz.com/en/posts/linux-pt
 More useful links:
 
 - [https://stackoverflow.com/questions/74284202/how-to-use-a-pseudo-terminal-returned-from-posix-openpt]
+- [https://github.com/dzervas/netcatty]
 - [https://github.com/nelhage/reptyr]
+
+## Run
+
+```bash
+# in one terminal
+cargo run
+# in another
+./attach.sh
+```
