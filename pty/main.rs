@@ -30,26 +30,54 @@ fn start_parent(master: std::os::fd::OwnedFd) {
     let listener = std::net::TcpListener::bind(address).unwrap();
     println!("Listenning on {address}");
     for stream in listener.incoming() {
-        let mut stream = stream.unwrap();
+        let stream = std::sync::Arc::new(std::sync::Mutex::new(stream.unwrap()));
         dbg!("connected", &stream);
-        stream.write(b"Welcome!\n").unwrap();
-        let mut master = master.clone();
 
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            loop {
-                let nread = master.read(&mut buf).unwrap();
-                if nread == 0 {
-                    break; // never happens as read() above blocks
-                }
-                if let Err(_) = stream.write(&buf[0..nread]) {
-                    break;
-                }
-            }
+        {
+            let mut master = master.clone();
+            let stream = stream.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    let nread = master.read(&mut buf).unwrap();
+                    if nread == 0 {
+                        break; // never happens as read() above blocks
+                    }
 
-            dbg!("disconnecting", &stream);
-            drop(stream);
-        });
+                    let mut stream = stream.lock().unwrap();
+                    if let Err(_) = stream.write(&buf[0..nread]) {
+                        break;
+                    }
+                    drop(stream);
+                }
+
+                dbg!("finished writing to", &stream);
+                drop(stream);
+            });
+        }
+
+        {
+            let mut master = master.clone();
+            let stream = stream.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    let mut stream = stream.lock().unwrap();
+                    if let Ok(nread) = stream.read(&mut buf) {
+                        master.write(&buf[0..nread]).unwrap();
+                        if nread == 0 {
+                            break; // never happens as read() above blocks
+                        }
+                    } else {
+                        break;
+                    }
+                    drop(stream);
+                }
+
+                dbg!("finished reading from", &stream);
+                drop(stream);
+            });
+        }
     }
 }
 
