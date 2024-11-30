@@ -30,12 +30,13 @@ fn start_parent(master: std::os::fd::OwnedFd) {
     let listener = std::net::TcpListener::bind(address).unwrap();
     println!("Listenning on {address}");
     for stream in listener.incoming() {
-        let stream = std::sync::Arc::new(std::sync::Mutex::new(stream.unwrap()));
+        let stream = stream.unwrap();
         dbg!("connected", &stream);
+        let mut stream1 = stream.try_clone().unwrap();
+        let mut stream2 = stream.try_clone().unwrap();
 
         {
             let mut master = master.clone();
-            let stream = stream.clone();
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
                 loop {
@@ -44,26 +45,19 @@ fn start_parent(master: std::os::fd::OwnedFd) {
                         break; // never happens as read() above blocks
                     }
 
-                    let mut stream = stream.lock().unwrap();
-                    if let Err(_) = stream.write(&buf[0..nread]) {
+                    if let Err(_) = stream1.write(&buf[0..nread]) {
                         break;
                     }
-                    drop(stream);
                 }
-
-                dbg!("finished writing to", &stream);
-                drop(stream);
             });
         }
 
         {
             let mut master = master.clone();
-            let stream = stream.clone();
             std::thread::spawn(move || {
                 let mut buf = [0u8; 4096];
                 loop {
-                    let mut stream = stream.lock().unwrap();
-                    if let Ok(nread) = stream.read(&mut buf) {
+                    if let Ok(nread) = stream2.read(&mut buf) {
                         master.write(&buf[0..nread]).unwrap();
                         if nread == 0 {
                             break; // never happens as read() above blocks
@@ -71,11 +65,7 @@ fn start_parent(master: std::os::fd::OwnedFd) {
                     } else {
                         break;
                     }
-                    drop(stream);
                 }
-
-                dbg!("finished reading from", &stream);
-                drop(stream);
             });
         }
     }
